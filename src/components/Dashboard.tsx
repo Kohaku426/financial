@@ -138,7 +138,7 @@ export default function Dashboard() {
             case 'salary': return <SalaryTab shiftsData={shiftsData} setShiftsData={setShiftsData} />;
             case 'report': return <ReportTab historyData={historyData} onDeleteHistory={handleDeleteHistory} />;
             case 'history': return <HistoryTab historyData={historyData} onDeleteHistory={handleDeleteHistory} assetsData={assetsData} />;
-            case 'ai': return <AITab historyData={historyData} assetsData={assetsData} />;
+            case 'ai': return <AITab historyData={historyData} assetsData={assetsData} user={user} />;
             default: return <HomeTab historyData={historyData} assetsData={assetsData} />;
         }
     };
@@ -1862,7 +1862,7 @@ function SalaryTab({ shiftsData, setShiftsData }: any) {
 // ----------------------------------------------------------------------
 // AI TAB
 // ----------------------------------------------------------------------
-function AITab({ historyData, assetsData }: { historyData: any[], assetsData: any }) {
+function AITab({ historyData, assetsData, user }: { historyData: any[], assetsData: any, user: User | null }) {
     const scrollRef = useRef<HTMLDivElement>(null);
     const [input, setInput] = useState('');
     const [isTyping, setIsTyping] = useState(false);
@@ -1913,13 +1913,72 @@ function AITab({ historyData, assetsData }: { historyData: any[], assetsData: an
 
     const handleFileUpload = (e: any) => {
         const file = e.target.files[0];
-        if (!file) return;
-        setMessages(prev => [...prev, { id: Date.now().toString(), role: 'user', text: "📎 " + file.name + " をアップロードしました" }]);
-        setIsTyping(true);
-        setTimeout(() => {
-            setMessages(prev => [...prev, { id: Date.now().toString() + 'ai', role: 'ai', text: "ファイルの解析が完了しました。データから34件の取引履歴を抽出し、データベースへの自動マッピングを成功裏に終えました。引き続きAIサポートが必要な場合はお申し付けください。" }]);
-            setIsTyping(false);
-        }, 1500);
+        if (!file || !user) return;
+
+        const reader = new FileReader();
+        reader.onload = async (event) => {
+            const csvText = event.target?.result as string;
+            setMessages(prev => [...prev, { id: Date.now().toString(), role: 'user', text: "📎 " + file.name + " をアップロードしました" }]);
+            setIsTyping(true);
+
+            try {
+                // 1. Send CSV text to AI for analysis
+                const res = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        messages: [{ role: 'user', content: `以下のCSVデータを解析して取引履歴JSON配列に変換してください:\n\n${csvText}` }],
+                        contextData: { totalAssets: assetsData?.totalAssets || 0, categorizedSpending: [], recentHistory: [], currentMonthNet: 0 }
+                    })
+                });
+
+                const data = await res.json();
+
+                // AI route should return JSON string in its response
+                let transactions: any[] = [];
+                try {
+                    // Extract JSON from response (handling potential markdown code blocks)
+                    const jsonMatch = data.response.match(/\[[\s\S]*\]/);
+                    if (jsonMatch) {
+                        transactions = JSON.parse(jsonMatch[0]);
+                    }
+                } catch (parseErr) {
+                    console.error("Failed to parse AI response as JSON:", parseErr);
+                }
+
+                if (transactions.length > 0) {
+                    // 2. Insert into Supabase
+                    const insertData = transactions.map(t => ({
+                        user_id: user.id,
+                        date: t.date,
+                        item: t.item,
+                        amount: t.amount,
+                        type: t.type,
+                        account: t.account || 'CSV Import'
+                    }));
+
+                    const { error: insertError } = await supabase.from('histories').insert(insertData);
+                    if (insertError) throw insertError;
+
+                    setMessages(prev => [...prev, {
+                        id: Date.now().toString() + 'ai',
+                        role: 'ai',
+                        text: `ファイルの解析が完了しました。${transactions.length}件の取引履歴を抽出し、データベースへの登録を成功裏に終えました。`
+                    }]);
+
+                    // Trigger refresh if needed (this component works on props, ideally we'd refresh parent)
+                    window.location.reload(); // Quickest way to sync state for now
+                } else {
+                    setMessages(prev => [...prev, { id: Date.now().toString() + 'ai', role: 'ai', text: "ファイルの解析に失敗しました。対応しているCSV形式か確認してください。" }]);
+                }
+            } catch (err: any) {
+                console.error("CSV Upload Error:", err);
+                setMessages(prev => [...prev, { id: Date.now().toString() + 'ai', role: 'ai', text: "エラーが発生しました: " + err.message }]);
+            } finally {
+                setIsTyping(false);
+            }
+        };
+        reader.readAsText(file);
     };
 
     return (

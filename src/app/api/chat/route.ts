@@ -23,10 +23,14 @@ export async function POST(req: Request) {
 【支出の傾向】
 最近の支出カテゴリ内訳: ${JSON.stringify(contextData.categorizedSpending)}
 
-【直近の取引履歴】
-${JSON.stringify(contextData.recentHistory.slice(0, 10))}
+【重要：CSV解析モード】
+もしユーザーが「📎 ... をアップロードしました」というメッセージの後にCSVデータを提供した場合、以下のJSON形式のみで返答してください。余計な文章は一切含めないでください。
+[
+  { "date": "YYYY-MM-DD", "item": "項目名", "amount": 数値, "type": "income"または"expense", "account": "推測される口座名" }
+]
+CSVの各行を正確に抽出し、適切な型と金額（支出は負の数）を設定してください。日本語の項目名はそのまま維持してください。
 
-応答はプレーンテキストで、親近感のある言葉遣い（〜ですね、〜がおすすめです等）を使用してください。
+通常対話の場合は、プレーンテキストで、親近感のある言葉遣い（〜ですね、〜がおすすめです等）を使用してください。
 専門用語は避け、具体的な節約案や資産運用の第一歩を提案してください。`;
 
         const requestBody = {
