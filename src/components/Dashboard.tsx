@@ -118,7 +118,7 @@ export default function Dashboard() {
         }
         fetchSupabaseData();
         return () => { isMounted = false; };
-    }, []);
+    }, [user]);
 
     const toggleCategory = (id: string) => {
         setExpandedCategories(prev => ({ ...prev, [id]: !prev[id] }));
