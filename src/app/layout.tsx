@@ -1,11 +1,14 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
   title: 'Fin-Tech Assistant (Pro Edition)',
   description: 'Next-generation PWA for personal finance',
-  themeColor: '#0a0a0f',
   manifest: '/manifest.json',
+};
+
+export const viewport: Viewport = {
+  themeColor: '#0a0a0f',
 };
 
 export default function RootLayout({

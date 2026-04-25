@@ -59,27 +59,28 @@ export default function Dashboard() {
 
     useEffect(() => {
         if (!user) return;
+        const uid = user.id; // Capture and refine
         let isMounted = true;
         async function fetchSupabaseData() {
             try {
-                let { data: accounts } = await supabase.from('accounts').select('*').eq('user_id', user.id);
+                let { data: accounts } = await supabase.from('accounts').select('*').eq('user_id', uid);
 
                 // SEEDING LOGIC: If tables are empty for THIS USER, seed them
                 if (!accounts || accounts.length === 0) {
-                    console.log("Seeding Supabase DB for user:", user.id);
+                    console.log("Seeding Supabase DB for user:", uid);
                     const seedAccounts = MOCK_ASSETS.categories.flatMap(cat => cat.items.map(item => ({
-                        user_id: user.id,
+                        user_id: uid,
                         category_id: cat.id,
                         name: item.name,
                         balance: item.balance,
                         brand_color: (item as any).brandColor || null
                     })));
                     await supabase.from('accounts').insert(seedAccounts);
-                    const res = await supabase.from('accounts').select('*').eq('user_id', user.id);
+                    const res = await supabase.from('accounts').select('*').eq('user_id', uid);
                     accounts = res.data;
 
                     const seedHistories = MOCK_HISTORY.map(h => ({
-                        user_id: user.id,
+                        user_id: uid,
                         date: h.date,
                         item: h.item,
                         account: h.account || 'Unknown',
@@ -90,7 +91,7 @@ export default function Dashboard() {
                     await supabase.from('histories').insert(seedHistories);
                 }
 
-                const { data: histories } = await supabase.from('histories').select('*').eq('user_id', user.id).order('date', { ascending: false });
+                const { data: histories } = await supabase.from('histories').select('*').eq('user_id', uid).order('date', { ascending: false });
 
                 if (!isMounted) return;
 
@@ -143,12 +144,11 @@ export default function Dashboard() {
         }
         switch (activeTab) {
             case 'home': return <HomeTab historyData={historyData} assetsData={assetsData} />;
-            case 'assets': return <AssetsTab expandedCategories={expandedCategories} toggleCategory={toggleCategory} assetsData={assetsData} setAssetsData={setAssetsData} historyData={historyData} onDeleteHistory={handleDeleteHistory} />;
+            case 'assets': return <AssetsTab user={user} expandedCategories={expandedCategories} toggleCategory={toggleCategory} assetsData={assetsData} setAssetsData={setAssetsData} historyData={historyData} onDeleteHistory={handleDeleteHistory} />;
             case 'salary': return <SalaryTab shiftsData={shiftsData} setShiftsData={setShiftsData} />;
             case 'report': return <ReportTab historyData={historyData} onDeleteHistory={handleDeleteHistory} />;
             case 'history': return <HistoryTab historyData={historyData} onDeleteHistory={handleDeleteHistory} assetsData={assetsData} />;
             case 'ai': return <AITab historyData={historyData} assetsData={assetsData} />;
-            case 'accounts': return <AssetsTab user={user} expandedCategories={expandedCategories} toggleCategory={toggleCategory} assetsData={assetsData} setAssetsData={setAssetsData} historyData={historyData} onDeleteHistory={handleDeleteHistory} />;
             default: return <HomeTab historyData={historyData} assetsData={assetsData} />;
         }
     };
@@ -261,7 +261,8 @@ function AddTransactionModal({ onClose, incomeCategories, setIncomeCategories, e
     const [isAdvance, setIsAdvance] = useState(false);
 
     const handleSave = async () => {
-        if (!amount) return;
+        if (!amount || !user) return;
+        const uid = user.id;
         const numAmount = parseInt(amount, 10) * (isIncome ? 1 : -1);
 
         // Find existing balance to simulate proper new balance for history
@@ -273,7 +274,7 @@ function AddTransactionModal({ onClose, incomeCategories, setIncomeCategories, e
         const baseId = Date.now().toString();
 
         dbTransactions.push({
-            user_id: user.id,
+            user_id: uid,
             date,
             item: memo ? `${category} - ${memo}` : category,
             account,
@@ -284,7 +285,7 @@ function AddTransactionModal({ onClose, incomeCategories, setIncomeCategories, e
 
         if (isAdvance && !isIncome) {
             dbTransactions.push({
-                user_id: user.id,
+                user_id: uid,
                 date,
                 item: `立替記録 (${memo || category})`,
                 account: '立替金',
@@ -1193,10 +1194,11 @@ function AssetsTab({ user, expandedCategories, toggleCategory, assetsData, setAs
     const [draftForm, setDraftForm] = useState({ name: '', balance: '' });
 
     const handleUpdateBalance = async (accountId: string, newBalance: number) => {
-        if (isNaN(newBalance)) return;
+        if (isNaN(newBalance) || !user) return;
+        const uid = user.id;
         let targetAccountName = "";
         const cloned = JSON.parse(JSON.stringify(assetsData));
-        for (let cat of cloned.categories) {
+        for (const cat of cloned.categories) {
             const item = cat.items.find((i: any) => i.id === accountId);
             if (item) {
                 targetAccountName = item.name;
@@ -1211,7 +1213,7 @@ function AssetsTab({ user, expandedCategories, toggleCategory, assetsData, setAs
         setSelectedAccount((prev: any) => ({ ...prev, balance: newBalance }));
         if (targetAccountName) {
             try {
-                await supabase.from('accounts').update({ balance: newBalance }).eq('id', accountId).eq('user_id', user.id);
+                await supabase.from('accounts').update({ balance: newBalance }).eq('id', accountId).eq('user_id', uid);
             } catch (err) {
                 console.error("Failed to update balance on DB:", err);
             }
@@ -1254,11 +1256,12 @@ function AssetsTab({ user, expandedCategories, toggleCategory, assetsData, setAs
     }
 
     const handleSaveNewAccount = async () => {
-        if (!draftForm.name || !draftAccount) return;
+        if (!draftForm.name || !draftAccount || !user) return;
+        const uid = user.id;
         const balanceNum = parseInt(draftForm.balance || "0", 10) || 0;
 
         try {
-            const newDbAcct = { user_id: user.id, category_id: draftAccount.catId, name: draftForm.name, balance: balanceNum };
+            const newDbAcct = { user_id: uid, category_id: draftAccount.catId, name: draftForm.name, balance: balanceNum };
             const { data } = await supabase.from('accounts').insert([newDbAcct]).select('*');
 
             const cloned = JSON.parse(JSON.stringify(assetsData));
