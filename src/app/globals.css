@@ -1,0 +1,47 @@
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #22d3ee;
+  --color-secondary: #a855f7;
+  --color-success: #10b981;
+  --color-background: #0a0a0f;
+  --color-paypay-brand: #22d3ee;
+  --color-paypay-points: #10b981;
+}
+
+:root {
+  --background: #0a0a0f;
+  --foreground: #f8fafc;
+
+  --primary: #22d3ee;
+  --secondary: #a855f7;
+  --muted: #1e293b;
+  --border: rgba(255, 255, 255, 0.1);
+  --glass-bg: rgba(255, 255, 255, 0.03);
+}
+
+body {
+  color: var(--foreground);
+  background: var(--background);
+  font-family: Arial, Helvetica, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+@layer utilities {
+  .glass-panel {
+    @apply bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl shadow-[0_4px_30px_#0000001a];
+  }
+
+  .text-neon-cyan {
+    @apply text-cyan-400 drop-shadow-[0_0_8px_#22d3eecc];
+  }
+
+  .text-neon-purple {
+    @apply text-purple-400 drop-shadow-[0_0_8px_#a855f7cc];
+  }
+
+  .text-neon-green {
+    @apply text-emerald-400 drop-shadow-[0_0_8px_#10b981cc];
+  }
+}
