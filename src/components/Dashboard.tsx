@@ -1317,18 +1317,25 @@ function AssetsTab({ user, expandedCategories, toggleCategory, assetsData, setAs
 
         try {
             const newDbAcct = { user_id: uid, category_id: draftAccount.catId, name: draftForm.name, balance: balanceNum };
-            const { data } = await supabase.from('accounts').insert([newDbAcct]).select('*');
+            const { data, error } = await supabase.from('accounts').insert([newDbAcct]).select('*');
 
-            const cloned = JSON.parse(JSON.stringify(assetsData));
-            const cat = cloned.categories.find((c: any) => c.id === draftAccount.catId);
-            if (cat && data && data.length > 0) {
-                cat.items.push({ id: data[0].id, name: draftForm.name, balance: balanceNum });
-                cat.total += balanceNum;
-                cloned.totalAssets += balanceNum;
-                setAssetsData(cloned);
+            if (error) throw error;
+
+            if (data && data.length > 0) {
+                const cloned = JSON.parse(JSON.stringify(assetsData));
+                const cat = cloned.categories.find((c: any) => c.id === draftAccount.catId);
+                if (cat) {
+                    cat.items.push({ id: data[0].id, name: draftForm.name, balance: balanceNum });
+                    cat.total += balanceNum;
+                    cloned.totalAssets += balanceNum;
+                    setAssetsData(cloned);
+                }
+            } else {
+                alert("保存されましたがデータが取得できませんでした。再読み込みしてください。");
             }
         } catch (err) {
             console.error(err);
+            alert("保存に失敗しました。SQLが正しく実行されているか確認してください。");
         }
 
         setDraftAccount(null);
