@@ -5,6 +5,8 @@ CREATE TABLE IF NOT EXISTS public.accounts (
   category_id text NOT NULL,
   name text NOT NULL,
   balance numeric DEFAULT 0 NOT NULL,
+  closing_day integer,
+  payment_day integer,
   created_at timestamp with time zone DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 

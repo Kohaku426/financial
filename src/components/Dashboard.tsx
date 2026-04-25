@@ -1133,13 +1133,19 @@ function getIconForAsset(name: string) {
 
 
 
-function AccountDetailView({ account, onClose, historyData, onUpdateBalance, onDeleteAccount, onDeleteHistory }: { account: any, onClose: () => void, historyData: any[], onUpdateBalance: (id: string, newBal: number) => void, onDeleteAccount: (id: string) => void, onDeleteHistory: (id: string) => void }) {
-    const isCard = account.name.includes('カード');
+function AccountDetailView({ account, onClose, historyData, onUpdateAccount, onDeleteAccount, onDeleteHistory }: { account: any, onClose: () => void, historyData: any[], onUpdateAccount: (id: string, updates: any) => void, onDeleteAccount: (id: string) => void, onDeleteHistory: (id: string) => void }) {
+    const isCard = account.name.includes('カード') || account.category_id === 'cards';
     const [isEditing, setIsEditing] = useState(false);
     const [editBalance, setEditBalance] = useState(account.balance.toString());
+    const [editClosingDay, setEditClosingDay] = useState(account.closing_day?.toString() || "");
+    const [editPaymentDay, setEditPaymentDay] = useState(account.payment_day?.toString() || "");
 
     const handleSave = () => {
-        onUpdateBalance(account.id, parseInt(editBalance, 10));
+        onUpdateAccount(account.id, {
+            balance: parseInt(editBalance, 10),
+            closing_day: editClosingDay ? parseInt(editClosingDay, 10) : null,
+            payment_day: editPaymentDay ? parseInt(editPaymentDay, 10) : null
+        });
         setIsEditing(false);
     };
 
@@ -1179,28 +1185,50 @@ function AccountDetailView({ account, onClose, historyData, onUpdateBalance, onD
                         <Trash size={16} />
                     </button>
                 </div>
-                <div>
-                    <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold mb-1">現在の残高</p>
-                    {isEditing ? (
-                        <div className="flex items-center gap-2 mt-1">
-                            <input
-                                type="number"
-                                autoFocus
-                                value={editBalance}
-                                onChange={(e) => setEditBalance(e.target.value)}
-                                className="bg-slate-100 border border-slate-300 rounded-lg p-2 text-slate-900 font-mono text-2xl w-full max-w-[200px]"
-                            />
-                            <button onClick={handleSave} className="bg-slate-900 text-white px-4 py-2 rounded-lg font-bold text-sm">Save</button>
+                {isEditing ? (
+                    <div className="space-y-4 w-full mt-4">
+                        <div>
+                            <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold mb-1">現在の残高</p>
+                            <div className="flex items-center gap-2">
+                                <input
+                                    type="number"
+                                    autoFocus
+                                    value={editBalance}
+                                    onChange={(e) => setEditBalance(e.target.value)}
+                                    className="bg-slate-100 border border-slate-300 rounded-lg p-2 text-slate-900 font-mono text-2xl w-full"
+                                />
+                            </div>
                         </div>
-                    ) : (
+                        {isCard && (
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold mb-1">締め日</p>
+                                    <input type="number" value={editClosingDay} onChange={e => setEditClosingDay(e.target.value)} placeholder="25" className="bg-slate-100 border border-slate-300 rounded-lg p-2 text-slate-900 font-mono w-full" />
+                                </div>
+                                <div>
+                                    <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold mb-1">支払日</p>
+                                    <input type="number" value={editPaymentDay} onChange={e => setEditPaymentDay(e.target.value)} placeholder="10" className="bg-slate-100 border border-slate-300 rounded-lg p-2 text-slate-900 font-mono w-full" />
+                                </div>
+                            </div>
+                        )}
+                        <button onClick={handleSave} className="w-full bg-slate-900 text-white px-4 py-3 rounded-lg font-bold text-sm shadow-lg shadow-slate-900/20">設定を保存する</button>
+                    </div>
+                ) : (
+                    <div className="flex flex-col gap-1">
                         <div className="flex items-center gap-3">
                             <p className={cn("text-4xl font-black font-mono tabular-nums tracking-tighter", account.balance < 0 ? "text-rose-600" : "text-slate-900")}>
                                 {account.balance < 0 ? ("-¥" + Math.abs(account.balance).toLocaleString()) : ("¥" + account.balance.toLocaleString())}
                             </p>
                             <button onClick={() => setIsEditing(true)} className="text-slate-500 hover:text-slate-900 transition-colors p-2 bg-white shadow-sm rounded-full"><Settings size={14} /></button>
                         </div>
-                    )}
-                </div>
+                        {isCard && (account.closing_day || account.payment_day) && (
+                            <div className="flex gap-4 mt-1">
+                                {account.closing_day && <p className="text-[10px] font-bold text-slate-400">締め: {account.closing_day}日</p>}
+                                {account.payment_day && <p className="text-[10px] font-bold text-slate-400">支払: {account.payment_day}日</p>}
+                            </div>
+                        )}
+                    </div>
+                )}
             </header>
 
             <div className="p-5 border border-slate-200 rounded-2xl bg-white shadow-sm mb-8">
@@ -1248,8 +1276,8 @@ function AssetsTab({ user, expandedCategories, toggleCategory, assetsData, setAs
     const [draftAccount, setDraftAccount] = useState<{ type: string, catId: string } | null>(null);
     const [draftForm, setDraftForm] = useState({ name: '', balance: '' });
 
-    const handleUpdateBalance = async (accountId: string, newBalance: number) => {
-        if (isNaN(newBalance) || !user) return;
+    const handleUpdateAccount = async (accountId: string, updates: any) => {
+        if (!user) return;
         const uid = user.id;
         let targetAccountName = "";
         const cloned = JSON.parse(JSON.stringify(assetsData));
@@ -1257,20 +1285,25 @@ function AssetsTab({ user, expandedCategories, toggleCategory, assetsData, setAs
             const item = cat.items.find((i: any) => i.id === accountId);
             if (item) {
                 targetAccountName = item.name;
-                const diff = newBalance - item.balance;
-                item.balance = newBalance;
-                cat.total += diff;
-                cloned.totalAssets += diff;
+                if (updates.balance !== undefined) {
+                    const diff = updates.balance - item.balance;
+                    item.balance = updates.balance;
+                    cat.total += diff;
+                    cloned.totalAssets += diff;
+                }
+                if (updates.closing_day !== undefined) item.closing_day = updates.closing_day;
+                if (updates.payment_day !== undefined) item.payment_day = updates.payment_day;
                 break;
             }
         }
         setAssetsData(cloned);
-        setSelectedAccount((prev: any) => ({ ...prev, balance: newBalance }));
+        setSelectedAccount((prev: any) => ({ ...prev, ...updates }));
+
         if (targetAccountName) {
             try {
-                await supabase.from('accounts').update({ balance: newBalance }).eq('id', accountId).eq('user_id', uid);
+                await supabase.from('accounts').update(updates).eq('id', accountId).eq('user_id', uid);
             } catch (err) {
-                console.error("Failed to update balance on DB:", err);
+                console.error("Failed to update account on DB:", err);
             }
         }
     };
@@ -1307,7 +1340,7 @@ function AssetsTab({ user, expandedCategories, toggleCategory, assetsData, setAs
     };
 
     if (selectedAccount) {
-        return <AccountDetailView account={selectedAccount} onClose={() => setSelectedAccount(null)} historyData={historyData} onUpdateBalance={handleUpdateBalance} onDeleteAccount={handleDeleteAccount} onDeleteHistory={onDeleteHistory} />;
+        return <AccountDetailView account={selectedAccount} onClose={() => setSelectedAccount(null)} historyData={historyData} onUpdateAccount={handleUpdateAccount} onDeleteAccount={handleDeleteAccount} onDeleteHistory={onDeleteHistory} />;
     }
 
     const handleSaveNewAccount = async () => {
