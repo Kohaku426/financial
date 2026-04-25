@@ -38,9 +38,14 @@ export default function Dashboard() {
     const [activeTab, setActiveTab] = useState<TabType>('home');
     const [isAddTransactionOpen, setIsAddTransactionOpen] = useState(false);
 
-    const [assetsData, setAssetsData] = useState(MOCK_ASSETS);
+    const [assetsData, setAssetsData] = useState(() => {
+        const empty = JSON.parse(JSON.stringify(MOCK_ASSETS));
+        empty.categories.forEach((c: any) => { c.items = []; c.total = 0; });
+        empty.totalAssets = 0;
+        return empty;
+    });
     const [historyData, setHistoryData] = useState<any[]>([]);
-    const [shiftsData, setShiftsData] = useState(MOCK_SHIFTS);
+    const [shiftsData, setShiftsData] = useState<any[]>([]);
     const [incomeCategories, setIncomeCategories] = useState(INCOME_CATEGORIES);
     const [expenseCategories, setExpenseCategories] = useState(EXPENSE_CATEGORIES);
     const [isSupabaseLoading, setIsSupabaseLoading] = useState(true);
