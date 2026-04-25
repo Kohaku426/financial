@@ -273,50 +273,70 @@ function AddTransactionModal({ onClose, incomeCategories, setIncomeCategories, e
     const [memo, setMemo] = useState('');
     const [isAdvance, setIsAdvance] = useState(false);
 
+    const [isMultiDate, setIsMultiDate] = useState(false);
+    const [selectedDates, setSelectedDates] = useState<string[]>([]);
+
     const handleSave = async () => {
         if (!amount || !user) return;
         const uid = user.id;
         const numAmount = parseInt(amount, 10) * (isIncome ? 1 : -1);
+
+        const datesToProcess = isMultiDate && selectedDates.length > 0 ? selectedDates : [date];
 
         // Find existing balance to simulate proper new balance for history
         const cat = assetsData.categories.find((c: any) => c.items.some((i: any) => i.name === account));
         const acctObj = cat?.items.find((i: any) => i.name === account);
         const currentBalance = acctObj?.balance || 0;
 
-        let dbTransactions = [];
-        const baseId = Date.now().toString();
+        let dbTransactions: any[] = [];
+        let finalAssets = JSON.parse(JSON.stringify(assetsData));
 
-        dbTransactions.push({
-            user_id: uid,
-            date,
-            item: memo ? `${category} - ${memo}` : category,
-            account,
-            amount: numAmount,
-            balance: currentBalance + numAmount,
-            type: isIncome ? 'income' : 'expense'
-        });
+        datesToProcess.forEach((d, idx) => {
+            const baseId = (Date.now() + idx).toString();
+            const currentEntryAmount = numAmount;
+            const entryBalance = currentBalance + (numAmount * (idx + 1));
 
-        if (isAdvance && !isIncome) {
             dbTransactions.push({
                 user_id: uid,
-                date,
-                item: `立替記録 (${memo || category})`,
-                account: '立替金',
-                amount: Math.abs(numAmount),
-                balance: 0,
-                type: 'income'
+                date: d,
+                item: memo ? `${category} - ${memo}` : category,
+                account,
+                amount: currentEntryAmount,
+                balance: entryBalance,
+                type: isIncome ? 'income' : 'expense'
             });
 
-            const clonedAssets = JSON.parse(JSON.stringify(assetsData));
-            let advanceCategory = clonedAssets.categories.find((c: any) => c.id === 'advances');
-            if (!advanceCategory) {
-                advanceCategory = { id: 'advances', name: '立替金', total: 0, color: COLORS.success, items: [] };
-                clonedAssets.categories.push(advanceCategory);
+            if (isAdvance && !isIncome) {
+                dbTransactions.push({
+                    user_id: uid,
+                    date: d,
+                    item: `立替記録 (${memo || category})`,
+                    account: '立替金',
+                    amount: Math.abs(numAmount),
+                    balance: 0,
+                    type: 'income'
+                });
+
+                let advanceCategory = finalAssets.categories.find((c: any) => c.id === 'advances');
+                if (!advanceCategory) {
+                    advanceCategory = { id: 'advances', name: '立替金', total: 0, color: COLORS.success, items: [] };
+                    finalAssets.categories.push(advanceCategory);
+                }
+                advanceCategory.total += Math.abs(numAmount);
+                finalAssets.totalAssets += Math.abs(numAmount);
+                advanceCategory.items.push({ id: baseId + '-item', name: `立替: ${memo || category}`, balance: Math.abs(numAmount) });
             }
-            advanceCategory.total += Math.abs(numAmount);
-            clonedAssets.totalAssets += Math.abs(numAmount);
-            advanceCategory.items.push({ id: baseId + '-item', name: `立替: ${memo || category}`, balance: Math.abs(numAmount) });
-            setAssetsData(clonedAssets);
+        });
+
+        // Also update the actual account balance in assetsData for the selected account
+        const targetCategory = finalAssets.categories.find((c: any) => c.items.some((i: any) => i.name === account));
+        if (targetCategory) {
+            const acct = targetCategory.items.find((i: any) => i.name === account);
+            if (acct) {
+                acct.balance = Number(acct.balance) + (numAmount * datesToProcess.length);
+                targetCategory.total = targetCategory.items.reduce((sum: number, i: any) => sum + Number(i.balance), 0);
+                finalAssets.totalAssets = finalAssets.categories.reduce((sum: number, c: any) => sum + Number(c.total), 0);
+            }
         }
 
         try {
@@ -324,6 +344,7 @@ function AddTransactionModal({ onClose, incomeCategories, setIncomeCategories, e
             if (error) throw error;
             if (data) {
                 setHistoryData((prev: any) => [...data, ...prev].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
+                if (isAdvance && !isIncome) setAssetsData(finalAssets);
             }
             onClose();
         } catch (err) {
@@ -334,75 +355,96 @@ function AddTransactionModal({ onClose, incomeCategories, setIncomeCategories, e
 
     return (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-slate-100/60 backdrop-blur-md z-[100] flex items-end sm:items-center justify-center p-0 sm:p-4">
-            <motion.div initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }} transition={{ type: "spring", damping: 25, stiffness: 200 }} className="bg-white border border-slate-200 w-full max-w-md rounded-t-3xl sm:rounded-3xl p-6 shadow-2xl relative">
+            <motion.div initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }} transition={{ type: "spring", damping: 25, stiffness: 200 }} className="bg-white border border-slate-200 w-full max-w-md rounded-t-3xl sm:rounded-3xl p-6 shadow-2xl relative max-h-[90vh] overflow-y-auto">
                 <div className="flex justify-between items-center mb-6">
                     <h3 className="text-xl font-bold text-slate-900 tracking-tight">取引を作成</h3>
                     <button onClick={onClose} className="text-slate-500 hover:text-slate-900 p-2 bg-white shadow-sm rounded-full"><X size={20} /></button>
                 </div>
 
                 <div className="flex bg-slate-100 p-1 rounded-xl mb-6 shadow-inner">
-                    <button onClick={() => { setIsIncome(false); setCategory(expenseCategories[0]); }} className={cn("flex-1 py-2 text-sm font-bold rounded-lg transition-colors", !isIncome ? "bg-slate-200 text-slate-900" : "text-slate-500 hover:text-slate-900")}>支出</button>
-                    <button onClick={() => { setIsIncome(true); setCategory(incomeCategories[0]); }} className={cn("flex-1 py-2 text-sm font-bold rounded-lg transition-colors", isIncome ? "bg-slate-200 text-slate-900" : "text-slate-500 hover:text-slate-900")}>収入</button>
+                    <button onClick={() => { setIsIncome(false); setCategory(expenseCategories[0]); }} className={cn("flex-1 py-2 text-sm font-bold rounded-lg transition-colors", !isIncome ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-900")}>支出</button>
+                    <button onClick={() => { setIsIncome(true); setCategory(incomeCategories[0]); }} className={cn("flex-1 py-2 text-sm font-bold rounded-lg transition-colors", isIncome ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-900")}>収入</button>
                 </div>
 
-                <div className="space-y-4">
+                <div className="space-y-6">
                     <div>
                         <label className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1 block">金額</label>
                         <div className="relative">
                             <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 text-xl font-mono">¥</span>
-                            <input type="number" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0" className={cn("w-full bg-white shadow-sm border border-slate-200 rounded-xl py-4 pl-12 pr-4 text-3xl font-mono focus:border-slate-400 outline-none transition-colors", !isIncome ? "text-slate-900" : "text-cyan-600")} autoFocus />
+                            <input type="number" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0" className={cn("w-full bg-slate-50 border border-slate-200 rounded-xl py-4 pl-12 pr-4 text-3xl font-mono focus:border-slate-400 focus:bg-white outline-none transition-all", !isIncome ? "text-slate-900" : "text-cyan-600")} autoFocus />
                         </div>
                     </div>
 
                     {!isIncome && (
-                        <label className="flex items-center gap-3 p-4 bg-amber-500/5 hover:bg-amber-500/10 border border-amber-500/20 rounded-xl cursor-pointer transition-colors">
-                            <input type="checkbox" checked={isAdvance} onChange={e => setIsAdvance(e.target.checked)} className="rounded text-amber-500 focus:ring-amber-500 bg-slate-100 border-amber-500/50 w-5 h-5 accent-amber-500" />
-                            <div className="flex flex-col">
-                                <span className="text-sm font-bold text-amber-600">立替フラグ (後で返ってくるお金)</span>
-                                <span className="text-[10px] text-amber-600/60 mt-0.5">立替金資産として同額を自動計上します</span>
+                        <div className="space-y-3">
+                            <label className="flex items-center gap-3 p-4 bg-amber-500/5 hover:bg-amber-500/10 border border-amber-500/20 rounded-xl cursor-pointer transition-colors">
+                                <input type="checkbox" checked={isAdvance} onChange={e => setIsAdvance(e.target.checked)} className="rounded text-amber-500 focus:ring-amber-500 bg-slate-50 border-amber-500/50 w-5 h-5 accent-amber-500" />
+                                <div className="flex flex-col">
+                                    <span className="text-sm font-bold text-amber-600">立替フラグ (後で返ってくるお金)</span>
+                                    <span className="text-[10px] text-amber-600/60 mt-0.5">立替金資産として同額を自動計上します</span>
+                                </div>
+                            </label>
+
+                            <label className="flex items-center gap-3 p-4 bg-indigo-500/5 hover:bg-indigo-500/10 border border-indigo-500/20 rounded-xl cursor-pointer transition-colors">
+                                <input type="checkbox" checked={isMultiDate} onChange={e => { setIsMultiDate(e.target.checked); if (!e.target.checked) setSelectedDates([]); }} className="rounded text-indigo-500 focus:ring-indigo-500 bg-slate-50 border-indigo-500/50 w-5 h-5 accent-indigo-500" />
+                                <div className="flex flex-col">
+                                    <span className="text-sm font-bold text-indigo-600">同じ金額を複数日に一括登録</span>
+                                    <span className="text-[10px] text-indigo-600/60 mt-0.5">毎日ランチなど、同じ内容の記録に便利です</span>
+                                </div>
+                            </label>
+                        </div>
+                    )}
+
+                    {!isMultiDate ? (
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1 block">口座</label>
+                                <select value={account} onChange={e => setAccount(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl py-3 px-3 text-sm text-slate-900 focus:border-slate-400 focus:bg-white outline-none appearance-none">
+                                    {assetsData.categories.flatMap((cat: any) => cat.items).map((item: any) => (
+                                        <option key={item.id} value={item.name}>{item.name}</option>
+                                    ))}
+                                </select>
                             </div>
-                        </label>
+                            <div>
+                                <label className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1 block">日付</label>
+                                <input type="date" value={date} onChange={e => setDate(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl py-3 px-3 text-sm text-slate-900 focus:border-slate-400 focus:bg-white outline-none appearance-none block" />
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="space-y-4">
+                            <label className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1 block">日付を選択 ({selectedDates.length}件)</label>
+                            <div className="grid grid-cols-7 gap-1 bg-slate-50 p-3 rounded-xl border border-slate-200">
+                                {Array.from({ length: 31 }).map((_, i) => {
+                                    const d = i + 1;
+                                    const dateStr = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+                                    const isSelected = selectedDates.includes(dateStr);
+                                    return (
+                                        <button key={d} onClick={() => setSelectedDates(prev => isSelected ? prev.filter(x => x !== dateStr) : [...prev, dateStr])} className={cn("h-10 rounded-lg text-xs font-bold transition-all border", isSelected ? "bg-indigo-600 border-indigo-600 text-white" : "bg-white border-slate-100 text-slate-600 hover:border-slate-300")}>
+                                            {d}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
                     )}
 
                     <div className="grid grid-cols-2 gap-4">
                         <div>
-                            <label className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1 block">口座</label>
-                            <select value={account} onChange={e => setAccount(e.target.value)} className="w-full bg-white shadow-sm border border-slate-200 rounded-xl py-3 px-3 text-sm text-slate-900 focus:border-slate-400 outline-none appearance-none">
-                                {assetsData.categories.flatMap((cat: any) => cat.items).map((item: any) => (
-                                    <option key={item.id} value={item.name} className="bg-white">{item.name}</option>
-                                ))}
+                            <label className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1 flex justify-between">
+                                <span>カテゴリ</span>
+                            </label>
+                            <select value={category} onChange={e => setCategory(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl py-3 px-3 text-sm text-slate-900 focus:border-slate-400 focus:bg-white outline-none appearance-none">
+                                {displayedCategories.map((c: string) => <option key={c} value={c}>{c}</option>)}
                             </select>
                         </div>
                         <div>
-                            <label className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1 block">日付</label>
-                            <input type="date" value={date} onChange={e => setDate(e.target.value)} className="w-full bg-white shadow-sm border border-slate-200 rounded-xl py-3 px-3 text-sm text-slate-900 focus:border-slate-400 outline-none appearance-none block" />
+                            <label className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1 block">メモ</label>
+                            <input type="text" value={memo} onChange={e => setMemo(e.target.value)} placeholder="例: スタバ, 定期券" className="w-full bg-slate-50 border border-slate-200 rounded-xl py-3 px-4 text-sm text-slate-900 focus:border-slate-400 focus:bg-white outline-none" />
                         </div>
                     </div>
 
-                    <div>
-                        <label className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1 flex justify-between">
-                            <span>カテゴリ</span>
-                            <button onClick={() => {
-                                const newCat = prompt("新しいカテゴリ名を入力してください");
-                                if (newCat) {
-                                    if (isIncome && !incomeCategories.includes(newCat)) setIncomeCategories([...incomeCategories, newCat]);
-                                    if (!isIncome && !expenseCategories.includes(newCat)) setExpenseCategories([...expenseCategories, newCat]);
-                                    setCategory(newCat);
-                                }
-                            }} className="text-cyan-600 font-medium text-[10px] hover:text-cyan-300">＋追加</button>
-                        </label>
-                        <select value={category} onChange={e => setCategory(e.target.value)} className="w-full bg-white shadow-sm border border-slate-200 rounded-xl py-3 px-3 text-sm text-slate-900 focus:border-slate-400 outline-none appearance-none">
-                            {displayedCategories.map((c: string) => <option key={c} value={c} className="bg-white">{c}</option>)}
-                        </select>
-                    </div>
-
-                    <div>
-                        <label className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1 block">メモ</label>
-                        <input type="text" value={memo} onChange={e => setMemo(e.target.value)} placeholder="例: スタバ, 定期券" className="w-full bg-white shadow-sm border border-slate-200 rounded-xl py-3 px-4 text-sm text-slate-900 focus:border-slate-400 outline-none" />
-                    </div>
-
-                    <button onClick={handleSave} className="w-full bg-slate-900 hover:bg-slate-800 text-white shadow-xl font-bold py-4 rounded-xl mt-6 transition-colors shadow-lg">
-                        記録を保存
+                    <button onClick={handleSave} className="w-full bg-slate-900 hover:bg-slate-800 text-white shadow-xl font-bold py-4 rounded-xl mt-4 transition-all active:scale-[0.98]">
+                        {isMultiDate ? `${selectedDates.length}件の記録を一括保存` : '記録を保存'}
                     </button>
                 </div>
             </motion.div>
