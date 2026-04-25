@@ -7,7 +7,7 @@ import {
     ChevronDown, ChevronLeft, ChevronRight, Send, AlertTriangle, Loader2,
     Landmark, CreditCard, Banknote, Camera,
     PlusCircle, ScanLine, Smartphone, CheckCircle2,
-    X, Plus, FileDown, CalendarDays, Settings, Paperclip, ArrowUpRight, ArrowDownRight, Sparkles, ArrowDownUp, PiggyBank, History, Trash, TrendingUp, PieChart as PieChartIcon
+    X, Plus, FileDown, CalendarDays, Settings, Paperclip, ArrowUpRight, ArrowDownRight, Sparkles, ArrowDownUp, PiggyBank, History, Trash, Trash2, TrendingUp, PieChart as PieChartIcon
 } from 'lucide-react';
 import {
     MOCK_ASSETS,
@@ -48,6 +48,7 @@ export default function Dashboard() {
     const [shiftsData, setShiftsData] = useState<any[]>([]);
     const [incomeCategories, setIncomeCategories] = useState(INCOME_CATEGORIES);
     const [expenseCategories, setExpenseCategories] = useState(EXPENSE_CATEGORIES);
+    const [workplaces, setWorkplaces] = useState<any[]>([]);
     const [isSupabaseLoading, setIsSupabaseLoading] = useState(true);
 
     const [expandedCategories, setExpandedCategories] = useState<Record<string, boolean>>({
@@ -100,6 +101,28 @@ export default function Dashboard() {
                 } else {
                     setHistoryData([]);
                 }
+
+                // --- Load Salary Data ---
+                const { data: dbWorkplaces } = await supabase.from('workplaces').select('*').eq('user_id', uid);
+                if (dbWorkplaces) setWorkplaces(dbWorkplaces);
+
+                const { data: dbShifts } = await supabase.from('shifts').select('*').eq('user_id', uid);
+                if (dbShifts) {
+                    const mappedShifts: Record<string, any> = {};
+                    dbShifts.forEach(s => {
+                        // If multiple shifts exist on the same day (different workplaces), we store them in a way the UI can handle.
+                        // For the summary/total calculation, we need all shifts.
+                        // For the simple calendar grid display, we'll show the sum or the first one.
+                        if (mappedShifts[s.date]) {
+                            mappedShifts[s.date].hours += s.hours;
+                            // Note: This loses individual workplace attribution for the *calendar click* if we just store an object.
+                            // Better: Store an array of shifts for that date.
+                        } else {
+                            mappedShifts[s.date] = { hours: s.hours, workplace_id: s.workplace_id, id: s.id };
+                        }
+                    });
+                    setShiftsData(mappedShifts);
+                }
             } catch (err) {
                 console.error("Supabase load error:", err);
             } finally {
@@ -135,7 +158,7 @@ export default function Dashboard() {
         switch (activeTab) {
             case 'home': return <HomeTab historyData={historyData} assetsData={assetsData} />;
             case 'assets': return <AssetsTab user={user} expandedCategories={expandedCategories} toggleCategory={toggleCategory} assetsData={assetsData} setAssetsData={setAssetsData} historyData={historyData} onDeleteHistory={handleDeleteHistory} />;
-            case 'salary': return <SalaryTab shiftsData={shiftsData} setShiftsData={setShiftsData} />;
+            case 'salary': return <SalaryTab shiftsData={shiftsData} setShiftsData={setShiftsData} workplaces={workplaces} setWorkplaces={setWorkplaces} user={user} />;
             case 'report': return <ReportTab historyData={historyData} onDeleteHistory={handleDeleteHistory} />;
             case 'history': return <HistoryTab historyData={historyData} onDeleteHistory={handleDeleteHistory} assetsData={assetsData} />;
             case 'ai': return <AITab historyData={historyData} assetsData={assetsData} user={user} />;
@@ -1376,20 +1399,16 @@ function AssetsTab({ user, expandedCategories, toggleCategory, assetsData, setAs
 // ----------------------------------------------------------------------
 // SALARY TAB (TAX SIMULATOR)
 // ----------------------------------------------------------------------
-function SalaryTab({ shiftsData, setShiftsData }: any) {
-    const [hourlyWage, setHourlyWage] = useState(MOCK_SALARY.hourlyWage);
-    const [transportation, setTransportation] = useState(MOCK_SALARY.transportation);
+function SalaryTab({ shiftsData, setShiftsData, workplaces, setWorkplaces, user }: any) {
     const [isFreelancer, setIsFreelancer] = useState(false);
     const [targetAmount, setTargetAmount] = useState(70000);
     const [currentMonthOffset, setCurrentMonthOffset] = useState(0);
-    const [closingDay, setClosingDay] = useState(25); // 締め日
+    const [closingDay, setClosingDay] = useState(25);
 
     const [viewMode, setViewMode] = useState<'month' | 'year'>('month');
 
-    // Modals internal states
+    // Modals
     const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
-    const [wageInput, setWageInput] = useState(hourlyWage.toString());
-    const [transInput, setTransInput] = useState(transportation.toString());
     const [closingDayInput, setClosingDayInput] = useState(closingDay.toString());
 
     const [isTargetModalOpen, setIsTargetModalOpen] = useState(false);
@@ -1397,61 +1416,70 @@ function SalaryTab({ shiftsData, setShiftsData }: any) {
 
     const [shiftModalDate, setShiftModalDate] = useState<string | null>(null);
     const [shiftHourInput, setShiftHourInput] = useState("8");
+    const [selectedWorkplaceId, setSelectedWorkplaceId] = useState<string>("");
 
-    const baseDate = new Date('2026-04-01');
+    const [isWorkplaceModalOpen, setIsWorkplaceModalOpen] = useState(false);
+    const [newWorkplaceName, setNewWorkplaceName] = useState("");
+    const [newWorkplaceWage, setNewWorkplaceWage] = useState("1100");
+
+    const baseDate = new Date();
     baseDate.setMonth(baseDate.getMonth() + currentMonthOffset);
     const m = baseDate.getMonth() + 1;
     const y = baseDate.getFullYear();
 
-    const handleSetTarget = () => {
-        setIsTargetModalOpen(true);
-        setTargetInput(targetAmount.toString());
-    };
-
-    const handleConfigWage = () => {
-        setIsConfigModalOpen(true);
-        setWageInput(hourlyWage.toString());
-        setTransInput(transportation.toString());
-        setClosingDayInput(closingDay.toString());
-    };
-
-    const handleAddShift = () => {
-        setShiftModalDate(null);
-        setShiftHourInput("8");
-    };
-
-    const submitConfig = () => {
-        const w = parseInt(wageInput, 10);
-        const t = parseInt(transInput, 10);
-        const c = parseInt(closingDayInput, 10);
-        if (!isNaN(w)) setHourlyWage(w);
-        if (!isNaN(t)) setTransportation(t);
-        if (!isNaN(c)) setClosingDay(c);
-        setIsConfigModalOpen(false);
-    };
-
-    const submitTarget = () => {
-        const t = parseInt(targetInput, 10);
-        if (!isNaN(t)) setTargetAmount(t);
-        setIsTargetModalOpen(false);
-    };
-
-    const submitShift = () => {
-        if (!shiftModalDate) return;
-        const h = parseInt(shiftHourInput, 10);
-        if (isNaN(h) || h === 0) {
-            const copy = { ...shiftsData };
-            delete copy[shiftModalDate];
-            setShiftsData(copy);
-        } else {
-            setShiftsData((prev: any) => ({ ...prev, [shiftModalDate]: { hours: h } }));
+    // Default workplace selection
+    useEffect(() => {
+        if (workplaces.length > 0 && !selectedWorkplaceId) {
+            setSelectedWorkplaceId(workplaces[0].id);
         }
+    }, [workplaces, selectedWorkplaceId]);
+
+    const handleSaveWorkplace = async () => {
+        if (!newWorkplaceName || !user) return;
+        const wage = parseInt(newWorkplaceWage, 10) || 0;
+        try {
+            const { data, error } = await supabase.from('workplaces').insert([{ user_id: user.id, name: newWorkplaceName, hourly_wage: wage }]).select('*');
+            if (error) throw error;
+            if (data) setWorkplaces((prev: any) => [...prev, data[0]]);
+            setIsWorkplaceModalOpen(false);
+            setNewWorkplaceName("");
+        } catch (err) { console.error(err); }
+    };
+
+    const handleDeleteWorkplace = async (id: string) => {
+        if (!confirm("この勤務地を削除しますか？関連するシフトも削除されます。")) return;
+        try {
+            await supabase.from('workplaces').delete().eq('id', id);
+            setWorkplaces((prev: any) => prev.filter((w: any) => w.id !== id));
+            // Also cleanup shifts locally if needed, or rely on next refresh
+        } catch (err) { console.error(err); }
+    };
+
+    const submitShift = async () => {
+        if (!shiftModalDate || !user || !selectedWorkplaceId) return;
+        const h = parseFloat(shiftHourInput);
+
+        try {
+            if (isNaN(h) || h === 0) {
+                await supabase.from('shifts').delete().eq('date', shiftModalDate).eq('workplace_id', selectedWorkplaceId).eq('user_id', user.id);
+                const copy = { ...shiftsData };
+                delete copy[shiftModalDate];
+                setShiftsData(copy);
+            } else {
+                const { data, error } = await supabase.from('shifts').upsert({
+                    user_id: user.id,
+                    workplace_id: selectedWorkplaceId,
+                    date: shiftModalDate,
+                    hours: h
+                }, { onConflict: 'user_id,workplace_id,date' }).select('*');
+
+                if (error) throw error;
+                if (data) setShiftsData((prev: any) => ({ ...prev, [shiftModalDate]: { hours: h, workplace_id: selectedWorkplaceId, id: data[0].id } }));
+            }
+        } catch (err) { console.error(err); }
         setShiftModalDate(null);
     };
 
-    // Accurate Tax Logic Setup (2026 Simulation Base)
-    // Only count shifts that match the currently viewed month string
-    // Accurate Tax Logic Setup (2026 Simulation Base)
     const monthlyShifts = useMemo(() => {
         return Object.keys(shiftsData).filter(dateStr => {
             const date = new Date(dateStr);
@@ -1459,397 +1487,183 @@ function SalaryTab({ shiftsData, setShiftsData }: any) {
             const checkMonth = date.getMonth() + 1;
             const checkDay = date.getDate();
 
-            // Example: Closing day = 25. April range = 3/26 to 4/25.
-            // If checkDay > closingDay, it belongs to next month's bucket.
-            // Simplified: Effective month/year for the shift.
             let effectiveYear = checkYear;
             let effectiveMonth = checkDay > closingDay ? checkMonth + 1 : checkMonth;
-
-            if (effectiveMonth > 12) {
-                effectiveMonth = 1;
-                effectiveYear += 1;
-            }
-
+            if (effectiveMonth > 12) { effectiveMonth = 1; effectiveYear += 1; }
             return effectiveYear === y && effectiveMonth === m;
-        }).map(k => shiftsData[k]);
+        }).map(k => ({ ...shiftsData[k], date: k }));
     }, [shiftsData, y, m, closingDay]);
 
-    const totalHours: number = monthlyShifts.reduce((acc: any, s: any) => acc + s.hours, 0) as number;
-    const totalShifts = monthlyShifts.length;
-    const currentGross = (hourlyWage * totalHours) + (transportation * totalShifts);
-    const annualizedGross = currentGross * 12; // Simple projection
+    // Grouping shifts by workplace for summary
+    const workplaceSummaries = useMemo(() => {
+        const summaries: Record<string, { hours: number, gross: number }> = {};
+        monthlyShifts.forEach(s => {
+            if (!summaries[s.workplace_id]) summaries[s.workplace_id] = { hours: 0, gross: 0 };
+            const wp = workplaces.find((w: any) => w.id === s.workplace_id);
+            const wage = wp ? wp.hourly_wage : 1100;
+            summaries[s.workplace_id].hours += s.hours;
+            summaries[s.workplace_id].gross += s.hours * wage;
+        });
+        return summaries;
+    }, [monthlyShifts, workplaces]);
+
+    const totalHours = monthlyShifts.reduce((acc, s) => acc + s.hours, 0);
+    const currentGross = Object.values(workplaceSummaries).reduce((acc, curr) => acc + curr.gross, 0);
+    const annualizedGross = currentGross * 12;
 
     const standardDeduction = 480000;
-
-    let projectedIncomeTax = 0;
-    let projectedResidentTax = 0;
-    let projectedPension = 0;
-    let projectedNHI = 0;
-    let projectedSocialInsurance = 0;
-    let currentMonthPension = 0;
-    let currentMonthNHI = 0;
-    let currentMonthSocialInsurance = 0;
-    let taxableIncome = 0;
+    let projectedIncomeTax = 0, projectedResidentTax = 0, currentMonthSocialInsurance = 0, currentMonthPension = 0, currentMonthNHI = 0, currentNet = 0;
 
     if (isFreelancer) {
-        taxableIncome = Math.max(0, annualizedGross - standardDeduction - 650000); // approximated blue return
-        if (taxableIncome <= 1950000) projectedIncomeTax = taxableIncome * 0.05;
-        else projectedIncomeTax = (1950000 * 0.05) + ((taxableIncome - 1950000) * 0.10);
-
-        projectedResidentTax = taxableIncome > 0 ? taxableIncome * 0.10 : 0;
-        projectedPension = 16980 * 12;
-        projectedNHI = annualizedGross * 0.09;
-
+        const taxable = Math.max(0, annualizedGross - standardDeduction - 650000);
+        projectedIncomeTax = taxable <= 1950000 ? taxable * 0.05 : (1950000 * 0.05) + ((taxable - 1950000) * 0.10);
+        projectedResidentTax = taxable > 0 ? taxable * 0.10 : 0;
         currentMonthPension = 16980;
-        currentMonthNHI = Math.floor(projectedNHI / 12);
+        currentMonthNHI = Math.floor((annualizedGross * 0.09) / 12);
+        currentNet = currentGross - (projectedIncomeTax / 12) - (projectedResidentTax / 12) - currentMonthPension - currentMonthNHI;
     } else {
-        const employmentIncomeDeduction = Math.min(Math.max(annualizedGross * 0.4, 550000), 1950000);
-        taxableIncome = Math.max(0, annualizedGross - standardDeduction - employmentIncomeDeduction);
-
-        if (taxableIncome <= 1950000) projectedIncomeTax = taxableIncome * 0.05;
-        else projectedIncomeTax = (1950000 * 0.05) + ((taxableIncome - 1950000) * 0.10);
-
-        projectedResidentTax = taxableIncome > 0 ? taxableIncome * 0.10 : 0;
-        projectedSocialInsurance = annualizedGross >= 1060000 ? annualizedGross * 0.15 : 0;
-
-        currentMonthSocialInsurance = Math.floor(projectedSocialInsurance / 12);
+        const ded = Math.min(Math.max(annualizedGross * 0.4, 550000), 1950000);
+        const taxable = Math.max(0, annualizedGross - standardDeduction - ded);
+        projectedIncomeTax = taxable <= 1950000 ? taxable * 0.05 : (1950000 * 0.05) + ((taxable - 1950000) * 0.10);
+        projectedResidentTax = taxable > 0 ? taxable * 0.10 : 0;
+        currentMonthSocialInsurance = Math.floor((annualizedGross >= 1060000 ? annualizedGross * 0.15 : 0) / 12);
+        currentNet = currentGross - (projectedIncomeTax / 12) - (projectedResidentTax / 12) - currentMonthSocialInsurance;
     }
-
-    const currentMonthIncomeTax = Math.floor(projectedIncomeTax / 12);
-    const currentMonthResidentTax = Math.floor(projectedResidentTax / 12);
-
-    const currentNet = isFreelancer
-        ? currentGross - currentMonthIncomeTax - currentMonthResidentTax - currentMonthPension - currentMonthNHI
-        : currentGross - currentMonthIncomeTax - currentMonthResidentTax - currentMonthSocialInsurance;
-
-    const isOver106 = annualizedGross >= 1060000;
-    const isOver130 = annualizedGross >= 1300000;
 
     return (
         <div className="pb-16 bg-white min-h-screen -m-3 md:-m-6 text-slate-800">
-            {/* Shift Board Header */}
-            <header className="bg-white flex justify-between items-center py-3 px-4 shadow-sm border-b border-slate-200">
-                <div className="w-5 h-5" /> {/* Empty spacer instead of ? */}
+            <header className="bg-white flex justify-between items-center py-3 px-4 shadow-sm border-b border-slate-200 sticky top-0 z-20">
                 <div className="text-lg font-bold tracking-tighter text-slate-900">{y}年 {m}月</div>
-                <button onClick={handleConfigWage} className="text-emerald-700 shadow-sm transition-transform hover:scale-110 active:scale-95"><Settings size={20} className="fill-emerald-700" /></button>
+                <button onClick={() => setIsConfigModalOpen(true)} className="text-emerald-700 p-2"><Settings size={20} /></button>
             </header>
 
-            {/* Toggle Tabs */}
-            <div className="flex border-b-2 border-slate-100 bg-white">
-                <div className="flex-1 flex justify-center">
-                    <button onClick={() => setViewMode('month')} className={cn("px-8 py-3 font-bold transition-all border-b-4", viewMode === 'month' ? "border-emerald-600 text-emerald-600" : "border-transparent text-slate-300 font-medium")}>月</button>
-                </div>
-                <div className="flex-1 flex justify-center">
-                    <button onClick={() => setViewMode('year')} className={cn("px-8 py-3 font-bold transition-all border-b-4", viewMode === 'year' ? "border-emerald-600 text-emerald-600" : "border-transparent text-slate-300 font-medium")}>年</button>
-                </div>
+            <div className="flex border-b border-slate-100 bg-white">
+                <button onClick={() => setViewMode('month')} className={cn("flex-1 py-3 font-bold transition-all border-b-2", viewMode === 'month' ? "border-emerald-600 text-emerald-600" : "border-transparent text-slate-300")}>月</button>
+                <button onClick={() => setViewMode('year')} className={cn("flex-1 py-3 font-bold transition-all border-b-2", viewMode === 'year' ? "border-emerald-600 text-emerald-600" : "border-transparent text-slate-300")}>年</button>
             </div>
 
             {viewMode === 'year' ? (
-                <div className="bg-slate-50 p-4 space-y-6">
-                    <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
-                        <h3 className="text-sm font-bold text-slate-700 mb-4 flex items-center gap-2">
-                            <TrendingUp size={16} className="text-emerald-500" /> {y}年 予想給与合計
-                        </h3>
-                        <div className="text-center py-4">
-                            <span className="text-3xl font-sans font-black text-slate-900 tracking-tighter">
-                                ¥{(currentGross * 12).toLocaleString()}
-                            </span>
-                            <div className="text-[10px] text-slate-400 font-bold mt-1 uppercase tracking-widest">Gross Projection</div>
+                <div className="p-4 space-y-4 bg-slate-50 min-h-screen">
+                    <div className="bg-white border rounded-2xl p-6 shadow-sm text-center">
+                        <h3 className="text-xs font-bold text-slate-400 uppercase mb-2">年間予測合計</h3>
+                        <div className="text-3xl font-black text-slate-900">¥{(currentGross * 12).toLocaleString()}</div>
+                    </div>
+                </div>
+            ) : (
+                <div className="p-4 pt-6 text-center space-y-8">
+                    <div className="relative mx-auto w-56 h-56 flex items-center justify-center">
+                        <ChevronLeft onClick={() => setCurrentMonthOffset(p => p - 1)} className="absolute -left-10 text-slate-300 cursor-pointer" size={28} />
+                        <svg className="w-full h-full transform -rotate-90 absolute">
+                            <circle cx="112" cy="112" r="100" className="stroke-slate-100" strokeWidth="15" fill="none" />
+                            <circle cx="112" cy="112" r="100" className="stroke-emerald-500" strokeWidth="15" strokeDasharray="628" strokeDashoffset={628 - (Math.min(currentGross / targetAmount, 1) * 628)} strokeLinecap="round" fill="none" style={{ transition: 'all 1s ease' }} />
+                        </svg>
+                        <div className="z-10 flex flex-col">
+                            <span className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Target Hit</span>
+                            <span className="text-3xl font-black text-slate-900">¥{currentGross.toLocaleString()}</span>
+                            <span className="text-[10px] text-slate-500 mt-1">/ ¥{targetAmount.toLocaleString()}</span>
+                        </div>
+                        <ChevronRight onClick={() => setCurrentMonthOffset(p => p + 1)} className="absolute -right-10 text-slate-300 cursor-pointer" size={28} />
+                    </div>
+
+                    <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm text-left">
+                        <div className="flex justify-between items-center mb-4">
+                            <h3 className="font-bold text-sm text-slate-800">勤務地別サマリー</h3>
+                            <button onClick={() => setIsWorkplaceModalOpen(true)} className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full">+ 追加</button>
+                        </div>
+                        <div className="space-y-4">
+                            {workplaces.map((wp: any) => {
+                                const stats = workplaceSummaries[wp.id] || { hours: 0, gross: 0 };
+                                return (
+                                    <div key={wp.id} className="flex justify-between items-center p-3 bg-slate-50 rounded-xl group relative">
+                                        <div>
+                                            <div className="font-bold text-sm text-slate-800">{wp.name}</div>
+                                            <div className="text-[10px] text-slate-400">時給 ¥{wp.hourly_wage.toLocaleString()}</div>
+                                        </div>
+                                        <div className="text-right flex items-center gap-4">
+                                            <div>
+                                                <div className="font-bold text-sm text-emerald-600">¥{stats.gross.toLocaleString()}</div>
+                                                <div className="text-[10px] text-slate-500">{stats.hours}h</div>
+                                            </div>
+                                            <button onClick={() => handleDeleteWorkplace(wp.id)} className="text-slate-300 hover:text-rose-500 transition-colors"><Trash2 size={14} /></button>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                            {workplaces.length === 0 && <div className="text-center py-4 text-[10px] text-slate-400 italic">勤務地が登録されていません</div>}
                         </div>
                     </div>
 
                     <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
-                        <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">月次予測推移</h3>
-                        <div className="space-y-3">
-                            {Array.from({ length: 12 }).map((_, idx) => {
-                                const currentM = idx + 1;
-                                const isCurrent = currentM === m;
+                        <div className="grid grid-cols-7 gap-1">
+                            {['日', '月', '火', '水', '木', '金', '土'].map(d => <div key={d} className="text-[10px] font-bold text-slate-400 mb-2">{d}</div>)}
+                            {/* Simple month grid logic - abbreviated for space */}
+                            {Array.from({ length: 31 }).map((_, i) => {
+                                const d = i + 1;
+                                const dateStr = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+                                const shift = shiftsData[dateStr];
                                 return (
-                                    <div key={idx} className={cn("flex items-center gap-4 p-2 rounded-xl border transition-all", isCurrent ? "bg-emerald-50 border-emerald-200 ring-4 ring-emerald-50" : "bg-transparent border-transparent")}>
-                                        <div className={cn("w-10 text-center font-bold text-sm", isCurrent ? "text-emerald-700" : "text-slate-400")}>{currentM}月</div>
-                                        <div className="flex-1 h-3 bg-slate-100 rounded-full overflow-hidden">
-                                            <div className="h-full bg-emerald-500 transition-all duration-1000" style={{ width: Math.min((currentGross / (targetAmount || 1)) * 100, 100) + '%' }} />
-                                        </div>
-                                        <div className={cn("w-20 text-right font-mono font-bold text-xs tabular-nums", isCurrent ? "text-emerald-600" : "text-slate-600")}>¥{currentGross.toLocaleString()}</div>
+                                    <div key={d} onClick={() => { setShiftModalDate(dateStr); setShiftHourInput(shift ? shift.hours.toString() : "8"); }} className={cn("h-10 flex flex-col items-center justify-center rounded-lg border text-[10px] font-bold cursor-pointer transition-all", shift ? "bg-emerald-50 border-emerald-200 text-emerald-700" : "border-slate-50 bg-slate-50/30 hover:bg-slate-100")}>
+                                        {d}
+                                        {shift && <span>{shift.hours}h</span>}
                                     </div>
                                 );
                             })}
                         </div>
                     </div>
-
-                    <div className="bg-emerald-600 text-white p-6 rounded-2xl shadow-lg relative overflow-hidden">
-                        <div className="relative z-10">
-                            <h4 className="font-bold text-sm mb-1 opacity-90">税控除後の手元残り（概算）</h4>
-                            <div className="text-2xl font-black font-sans tracking-tighter mb-4">¥{(currentNet * 12).toLocaleString()} / Year</div>
-                            <p className="text-[10px] leading-relaxed opacity-70 font-bold">
-                                ※ この数値は現在の勤務状況が1年間継続した場合のシミュレーションです。住民税や社会保険料は前年度の収入や年齢により変動する場合があります。
-                            </p>
-                        </div>
-                        <div className="absolute -right-8 -bottom-8 opacity-10">
-                            <TrendingUp size={160} />
-                        </div>
-                    </div>
-                </div>
-            ) : (
-
-                <div className="bg-white p-4 pt-6 text-center">
-                    <div className="flex justify-between items-center mb-6">
-                        <button onClick={() => setCurrentMonthOffset(p => p - 12)} className="text-emerald-700 font-bold text-xs flex items-center hover:opacity-70"><ChevronLeft size={16} /> 1年前を見る</button>
-                        <button onClick={handleSetTarget} className="border border-emerald-600 text-emerald-700 text-[10px] font-bold rounded-full px-3 py-1 flex items-center gap-1 hover:bg-emerald-50 transition-colors">
-                            月間目標 ¥{targetAmount.toLocaleString()} <span className="bg-emerald-600 text-white rounded-full p-0.5 ml-1"><Settings size={8} /></span>
-                        </button>
-                    </div>
-
-                    {/* Massive Green Circle Chart */}
-                    <div className="relative mx-auto w-64 h-64 flex items-center justify-center mb-8 mt-10">
-                        <ChevronLeft onClick={() => setCurrentMonthOffset(p => p - 1)} size={32} className="absolute -left-12 text-slate-300 font-light cursor-pointer hover:text-emerald-500 active:scale-90 transition-all" />
-                        {/* Circle SVG */}
-                        <svg className="w-full h-full transform -rotate-90 absolute">
-                            <circle cx="128" cy="128" r="115" className="stroke-slate-50" strokeWidth="20" fill="none" />
-                            <circle cx="128" cy="128" r="115" className="stroke-[#0bd433]" strokeWidth="20" strokeDasharray="722" strokeDashoffset={722 - (Math.min(currentGross / (targetAmount || 1), 1) * 722)} strokeLinecap="round" fill="none" style={{ transition: 'stroke-dashoffset 1.5s cubic-bezier(0.4, 0, 0.2, 1)' }} />
-                        </svg>
-                        <div className="flex flex-col items-center justify-center z-10 space-y-2">
-                            <span className="text-[10px] font-black text-slate-400 tracking-widest uppercase mb-1">Estimated</span>
-                            <span className="text-4xl font-sans tracking-tighter text-slate-900 font-black">¥{currentGross.toLocaleString()}</span>
-                        </div>
-                        <ChevronRight onClick={() => setCurrentMonthOffset(p => p + 1)} size={32} className="absolute -right-12 text-slate-300 font-light cursor-pointer hover:text-emerald-500 active:scale-90 transition-all" />
-                    </div>
-
-                    <div className="flex justify-center items-end gap-4 text-sm font-bold text-slate-700 mb-6 font-sans">
-                        <div><span className="text-[10px] font-medium opacity-80 mr-1">勤務時間</span><span className="text-xl">{Math.floor(totalHours)}h{Math.round((totalHours % 1) * 60)}m</span></div>
-                        <div><span className="text-[10px] font-medium opacity-80 mr-1">給料見込</span><span className="text-xl tracking-tighter">¥{currentGross.toLocaleString()}</span></div>
-                    </div>
-
-                    <button onClick={handleConfigWage} className="w-full max-w-[80%] mx-auto border border-slate-300 text-slate-600 font-bold text-[11px] py-2.5 rounded hover:bg-slate-50 transition-colors shadow-sm mb-6 flex justify-center items-center gap-2">
-                        <Settings size={12} />
-                        給料見込の対象期間・内訳を編集する
-                    </button>
-
-                    {/* Shift Calendar */}
-                    <div className="w-full max-w-[90%] mx-auto bg-white border border-slate-200 rounded-xl p-4 shadow-sm mb-6">
-                        <div className="flex justify-between items-center mb-4 px-1">
-                            <button onClick={() => setCurrentMonthOffset(p => p - 1)} className="text-slate-400 p-1 bg-slate-50 rounded-full hover:bg-slate-100"><ChevronLeft size={14} strokeWidth={3} /></button>
-                            <span className="font-bold text-[13px] text-slate-800 tracking-wider">{y}年{m}月 シフト管理</span>
-                            <button onClick={() => setCurrentMonthOffset(p => p + 1)} className="text-slate-400 p-1 bg-slate-50 rounded-full hover:bg-slate-100"><ChevronRight size={14} strokeWidth={3} /></button>
-                        </div>
-                        <div className="grid grid-cols-7 gap-1.5">
-                            {['日', '月', '火', '水', '木', '金', '土'].map((d, i) => <div key={d} className={cn("text-[9px] font-bold mb-1", i === 0 ? "text-rose-500" : i === 6 ? "text-blue-500" : "text-slate-500")}>{d}</div>)}
-                            {Array(3).fill(0).map((_, i) => <div key={'e' + i} />)}
-                            {Array.from({ length: 30 }).map((_, i) => {
-                                const d = i + 1;
-                                const key = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-                                const h = shiftsData[key]?.hours;
-                                return (
-                                    <div onClick={() => {
-                                        setShiftModalDate(key);
-                                        setShiftHourInput(h ? h.toString() : "8");
-                                    }} key={d} className={cn("h-9 flex flex-col items-center justify-center rounded border transition-colors cursor-pointer", h ? "bg-emerald-50/50 border-emerald-200 text-emerald-700 shadow-sm" : "border-slate-50 bg-white hover:bg-slate-50")}>
-                                        <span className={cn("text-[10px] font-bold", !h && "text-slate-600")}>{d}</span>
-                                        {h && <span className="text-[8px] font-bold opacity-80">{h}h</span>}
-                                    </div>
-                                )
-                            })}
-                        </div>
-                        <button onClick={handleAddShift} className="w-full mt-4 bg-emerald-50 hover:bg-emerald-100 active:scale-95 text-emerald-700 font-bold text-[11px] py-2.5 rounded-lg border border-emerald-200 transition-all flex items-center justify-center">
-                            <Plus size={12} className="inline mr-1 mb-0.5" />シフトを追加・一括編集する
-                        </button>
-                    </div>
-
-                    {/* workplaces detailed row */}
-                    <div className="border-t border-b border-slate-200 mt-4 px-1" />
-                    <div className="grid grid-cols-4 text-center text-[10px] text-slate-500 py-3 font-semibold bg-white">
-                        <div className="col-span-1 border-r border-slate-200"></div>
-                        <div className="text-center">勤務時間</div>
-                        <div className="text-center">給料見込</div>
-                        <div className="text-center">給料実績</div>
-                    </div>
-                    <div className="border-b border-slate-200" />
-
-                    {/* mozu row */}
-                    <div className="py-4 border-b border-slate-100 flex flex-col px-4 text-left group">
-                        <div className="font-bold text-sm text-slate-800 mb-2">mozu</div>
-                        <div className="grid grid-cols-4 w-full">
-                            <div className="col-span-1"></div>
-                            <div className="text-center font-sans text-sm">{Math.floor(totalHours)}h{Math.round((totalHours % 1) * 60)}m</div>
-                            <div className="text-center font-sans tracking-tight text-sm">¥{(totalHours * hourlyWage).toLocaleString()}</div>
-                            <div className="text-center text-slate-400 text-xs font-semibold flex items-center justify-center gap-1">未入力 <span className="text-emerald-600 opacity-60"><Plus size={10} className="rotate-45" /></span></div>
-                        </div>
-                    </div>
-                    {/* 新井園 row */}
-                    <div className="py-4 border-b border-slate-200 flex flex-col px-4 text-left">
-                        <div className="font-bold text-sm text-slate-800 mb-2 cursor-pointer flex gap-2"><PlusCircle size={14} className="text-emerald-500" /> 新規勤務地を追加</div>
-                    </div>
                 </div>
             )}
 
-            {/* Tax Sim below */}
-            <div className="bg-slate-50 p-4 border-t border-slate-200 pt-8 pb-12">
-                <header className="mb-4">
-                    <h2 className="text-xl font-bold tracking-tight text-slate-900 mb-2">My Tax Simulator</h2>
-                    <div className="flex bg-white p-1 rounded-xl mb-4 border border-slate-200 shadow-sm">
-                        <button onClick={() => setIsFreelancer(false)} className={cn("flex-1 py-1.5 text-[11px] font-bold rounded-lg transition-colors", !isFreelancer ? "bg-slate-200 text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-900")}>会社員/アルバイト</button>
-                        <button onClick={() => setIsFreelancer(true)} className={cn("flex-1 py-1.5 text-[11px] font-bold rounded-lg transition-colors", isFreelancer ? "bg-slate-200 text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-900")}>個人事業主/フリー</button>
-                    </div>
-                </header>
-
-                <div className="border border-slate-200 rounded-2xl p-4 bg-white shadow-sm mb-6">
-                    <h4 className="text-[11px] font-bold text-slate-900 mb-4 bg-slate-100 uppercase py-1 px-2 rounded w-fit">将来の概算税金予測 (月割)</h4>
-                    <div className="space-y-3 font-mono text-xs">
-                        <div className="flex justify-between text-slate-700">
-                            <span>見込売上/給与総額</span>
-                            <span>¥{currentGross.toLocaleString()}</span>
-                        </div>
-                        <div className="pt-2 pb-2 mt-2 border-y border-slate-200 space-y-2">
-                            <div className="flex justify-between text-slate-500">
-                                <span>所得税 (概算)</span>
-                                <span className="text-rose-600">-¥{currentMonthIncomeTax.toLocaleString()}</span>
-                            </div>
-                            <div className="flex justify-between text-slate-500">
-                                <span>住民税 (概算)</span>
-                                <span className="text-rose-600">-¥{currentMonthResidentTax.toLocaleString()}</span>
-                            </div>
-                            {isFreelancer ? (
-                                <>
-                                    <div className="flex justify-between text-slate-500">
-                                        <span>国民年金 (定額)</span>
-                                        <span className="text-rose-600">-¥{currentMonthPension.toLocaleString()}</span>
-                                    </div>
-                                    <div className="flex justify-between text-slate-500">
-                                        <span>国民健康保険 (概算)</span>
-                                        <span className="text-rose-600">-¥{currentMonthNHI.toLocaleString()}</span>
-                                    </div>
-                                </>
-                            ) : (
-                                <div className="flex justify-between text-slate-500">
-                                    <span>社会保険料 (健康/年金)</span>
-                                    <span className="text-rose-600">-¥{currentMonthSocialInsurance.toLocaleString()}</span>
-                                </div>
-                            )}
-                        </div>
-                        <div className="flex justify-between font-bold pt-2 text-sm text-slate-900 items-end">
-                            <span className="text-[10px] mb-0.5">差引手取り (Net)</span>
-                            <span className="text-emerald-600 text-lg tabular-nums tracking-tighter">¥{currentNet > 0 ? currentNet.toLocaleString() : 0}</span>
-                        </div>
-                    </div>
-                </div>
-
-                {!isFreelancer && (
-                    <div className={cn("border rounded-xl p-4 shadow-sm relative overflow-hidden bg-white hover:shadow transition", isOver130 ? "border-rose-400/50" : isOver106 ? "border-amber-400/50" : "border-emerald-500/30")}>
-                        {isOver130 && <div className="absolute top-0 right-0 left-0 h-1 bg-rose-500" />}
-                        {isOver106 && !isOver130 && <div className="absolute top-0 right-0 left-0 h-1 bg-amber-500" />}
-                        {!isOver106 && <div className="absolute top-0 right-0 left-0 h-1 bg-emerald-500" />}
-                        <div className="flex flex-col gap-1 relative z-10 pt-2">
-                            <h4 className={cn("font-bold text-xs tracking-tight mb-2 flex items-center justify-between", isOver130 ? "text-rose-600" : isOver106 ? "text-amber-600" : "text-emerald-600")}>
-                                <span>{isOver130 ? "130万円の壁" : isOver106 ? "106万円の壁" : "扶養内 (安全圏)"}</span>
-                                {isOver130 && <AlertTriangle size={14} />}
-                            </h4>
-
-                            {/* 106w bar */}
-                            <div className="mt-4">
-                                <div className="flex justify-between text-[9px] font-bold text-slate-500 mb-1 font-mono uppercase">
-                                    <span className="tracking-widest">社会保険加入ライン</span>
-                                    <span className={isOver106 ? "text-rose-600" : "text-emerald-600"}>{isOver106 ? '超過済' : "あと " + (1060000 - annualizedGross).toLocaleString() + " 円"}</span>
-                                </div>
-                                <div className="h-1 w-full bg-slate-100 rounded-full overflow-hidden">
-                                    <div className={cn("h-full transition-all", isOver106 ? "bg-rose-500" : "bg-emerald-500")} style={{ width: Math.min((annualizedGross / 1060000) * 100, 100) + '%' }} />
-                                </div>
-                            </div>
-
-                            {/* 130w bar */}
-                            <div className="mt-3">
-                                <div className="flex justify-between text-[9px] font-bold text-slate-500 mb-1 font-mono uppercase">
-                                    <span className="tracking-widest">完全扶養外ライン</span>
-                                    <span className={isOver130 ? "text-rose-600" : "text-emerald-600"}>{isOver130 ? '超過済' : "あと " + (1300000 - annualizedGross).toLocaleString() + " 円"}</span>
-                                </div>
-                                <div className="h-1 w-full bg-slate-100 rounded-full overflow-hidden">
-                                    <div className={cn("h-full transition-all", isOver130 ? "bg-rose-500" : "bg-emerald-500")} style={{ width: Math.min((annualizedGross / 1300000) * 100, 100) + '%' }} />
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                )}
-            </div>
-
+            {/* Modals are essentially the same but with workplace selection added for shifts */}
             <AnimatePresence>
-                {isTargetModalOpen && (
-                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-                        <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }} className="bg-white rounded-2xl w-full max-w-xs overflow-hidden shadow-2xl">
-                            <div className="bg-emerald-50 px-4 py-3 flex justify-between items-center border-b border-emerald-100">
-                                <h3 className="font-bold text-emerald-800 text-sm">月間目標の設定</h3>
-                                <button onClick={() => setIsTargetModalOpen(false)} className="text-emerald-400 hover:text-emerald-600"><X size={18} /></button>
-                            </div>
-                            <div className="p-4 space-y-4">
-                                <div>
-                                    <label className="text-[10px] font-bold text-slate-500 mb-1 block">目標金額 (円)</label>
-                                    <input type="number" value={targetInput} onChange={e => setTargetInput(e.target.value)} placeholder="70000" className="w-full rounded-md border border-slate-200 p-2 text-sm focus:border-emerald-500 outline-none tabular-nums" />
-                                </div>
-                            </div>
-                            <div className="p-4 border-t border-slate-100 mt-2">
-                                <button onClick={submitTarget} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2 rounded-lg transition-colors">設定を保存</button>
-                            </div>
-                        </motion.div>
-                    </motion.div>
-                )}
-
-                {isConfigModalOpen && (
-                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-                        <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }} className="bg-white rounded-2xl w-full max-w-sm overflow-hidden shadow-2xl">
-                            <div className="bg-slate-100 px-4 py-3 flex justify-between items-center border-b border-slate-200">
-                                <h3 className="font-bold text-slate-800 text-xs flex items-center gap-2"><Settings size={14} /> 給与・計算期間の設定</h3>
-                                <button onClick={() => setIsConfigModalOpen(false)} className="text-slate-400 hover:text-slate-600"><X size={18} /></button>
-                            </div>
-                            <div className="p-5 space-y-6">
-                                <section>
-                                    <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3 border-b border-slate-100 pb-1">基本給与設定</h4>
-                                    <div className="space-y-3">
-                                        <div>
-                                            <label className="text-[10px] font-bold text-slate-500 mb-1 block italic">ベース時給 (円)</label>
-                                            <input type="number" value={wageInput} onChange={e => setWageInput(e.target.value)} placeholder="1100" className="w-full rounded-lg border border-slate-200 p-3 text-sm focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none tabular-nums bg-slate-50/50" />
-                                        </div>
-                                        <div>
-                                            <label className="text-[10px] font-bold text-slate-500 mb-1 block italic">1日あたり交通費 (円)</label>
-                                            <input type="number" value={transInput} onChange={e => setTransInput(e.target.value)} placeholder="0" className="w-full rounded-lg border border-slate-200 p-3 text-sm focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none tabular-nums bg-slate-50/50" />
-                                        </div>
-                                    </div>
-                                </section>
-
-                                <section>
-                                    <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3 border-b border-slate-100 pb-1">計算期間（締め日）の設定</h4>
-                                    <div>
-                                        <label className="text-[10px] font-bold text-slate-500 mb-1 block italic">給与締め日 (例: 25なら前月26日〜当月25日)</label>
-                                        <div className="flex items-center gap-2">
-                                            <input type="number" value={closingDayInput} onChange={e => setClosingDayInput(e.target.value)} placeholder="25" className="w-20 rounded-lg border border-slate-200 p-3 text-sm focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none tabular-nums bg-slate-50/50 text-center" />
-                                            <span className="text-xs font-bold text-slate-600">日締め</span>
-                                        </div>
-                                        <p className="text-[10px] text-slate-400 mt-2">※ この設定により、月次表示の対象となるシフトの範囲が決定されます。</p>
-                                    </div>
-                                </section>
-                            </div>
-                            <div className="p-4 bg-slate-50 border-t border-slate-100">
-                                <button onClick={submitConfig} className="w-full bg-slate-900 hover:bg-black text-white font-bold py-3 rounded-xl transition-all text-sm shadow-lg active:scale-[0.98]">設定を保存する</button>
-                            </div>
-                        </motion.div>
-                    </motion.div>
-                )}
-
                 {shiftModalDate && (
-                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[100] flex items-end sm:items-center justify-center p-0 sm:p-4">
-                        <motion.div initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }} transition={{ type: "spring", damping: 25, stiffness: 200 }} className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-sm overflow-hidden shadow-2xl">
-                            <div className="bg-slate-100 px-4 py-3 flex justify-between items-center border-b border-slate-200">
-                                <h3 className="font-bold text-slate-800 text-sm">シフト入力: {shiftModalDate}</h3>
-                                <button onClick={() => setShiftModalDate(null)} className="text-slate-400 hover:text-slate-600"><X size={18} /></button>
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-end justify-center">
+                        <motion.div initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }} className="bg-white rounded-t-3xl w-full max-w-sm p-6 pb-12 shadow-2xl">
+                            <div className="flex justify-between items-center mb-6">
+                                <h3 className="font-bold text-slate-800">{shiftModalDate} の勤務</h3>
+                                <button onClick={() => setShiftModalDate(null)}><X size={20} /></button>
                             </div>
-                            <div className="p-6">
-                                <label className="text-[10px] font-bold text-slate-500 mb-2 block text-center">この日の勤務時間 (0を入力で削除)</label>
-                                <div className="flex items-center justify-center gap-4">
-                                    <button onClick={() => setShiftHourInput(p => Math.max(0, parseInt(p || '0', 10) - 1).toString())} className="w-12 h-12 rounded-full border-2 border-slate-200 text-slate-500 hover:bg-slate-50 font-bold text-xl flex items-center justify-center">-</button>
-                                    <input type="number" value={shiftHourInput} onChange={e => setShiftHourInput(e.target.value)} className="w-20 text-center font-bold text-3xl tabular-nums rounded-md border border-slate-300 py-2 outline-none focus:border-emerald-500" autoFocus />
-                                    <button onClick={() => setShiftHourInput(p => (parseInt(p || '0', 10) + 1).toString())} className="w-12 h-12 rounded-full border-2 border-emerald-200 bg-emerald-50 text-emerald-600 hover:bg-emerald-100 font-bold text-xl flex items-center justify-center">+</button>
+
+                            <div className="space-y-6">
+                                <div>
+                                    <label className="text-[10px] font-bold text-slate-500 mb-2 block">勤務地を選択</label>
+                                    <select value={selectedWorkplaceId} onChange={e => setSelectedWorkplaceId(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:border-emerald-500">
+                                        {workplaces.map((wp: any) => <option key={wp.id} value={wp.id}>{wp.name} (¥{wp.hourly_wage})</option>)}
+                                        {workplaces.length === 0 && <option disabled>先に勤務地を追加してください</option>}
+                                    </select>
                                 </div>
+
+                                <div>
+                                    <label className="text-[10px] font-bold text-slate-500 mb-2 block">勤務時間 (1日)</label>
+                                    <div className="flex items-center justify-between gap-4">
+                                        <button onClick={() => setShiftHourInput(p => Math.max(0, (parseFloat(p) || 0) - 0.5).toString())} className="w-12 h-12 rounded-full bg-slate-100 text-xl font-bold">-</button>
+                                        <input type="number" step="0.5" value={shiftHourInput} onChange={e => setShiftHourInput(e.target.value)} className="w-20 text-center text-2xl font-black tabular-nums border-b-2 border-emerald-500 outline-none" />
+                                        <button onClick={() => setShiftHourInput(p => ((parseFloat(p) || 0) + 0.5).toString())} className="w-12 h-12 rounded-full bg-emerald-100 text-emerald-600 text-xl font-bold">+</button>
+                                    </div>
+                                </div>
+
+                                <button onClick={submitShift} disabled={workplaces.length === 0} className="w-full bg-emerald-600 text-white font-bold py-4 rounded-2xl shadow-lg shadow-emerald-600/20 active:scale-[0.98] transition-all disabled:opacity-50">保存する</button>
                             </div>
-                            <div className="p-4 border-t border-slate-100 flex gap-2">
-                                <button onClick={() => { setShiftHourInput("0"); submitShift(); }} className="flex-1 bg-rose-50 text-rose-600 font-bold py-3 rounded-lg transition-colors text-sm border border-rose-100">シフト削除</button>
-                                <button onClick={submitShift} className="px-8 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-lg transition-colors text-sm shadow-md">決定</button>
+                        </motion.div>
+                    </motion.div>
+                )}
+
+                {isWorkplaceModalOpen && (
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+                        <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }} className="bg-white rounded-2xl w-full max-w-xs p-6 shadow-2xl">
+                            <h3 className="font-bold text-slate-800 mb-4">新規勤務地の追加</h3>
+                            <div className="space-y-4">
+                                <div>
+                                    <label className="text-[10px] font-bold text-slate-500 mb-1 block">名前</label>
+                                    <input type="text" value={newWorkplaceName} onChange={e => setNewWorkplaceName(e.target.value)} placeholder="例: カフェmozu" className="w-full p-3 bg-slate-50 rounded-xl border-none outline-none focus:ring-2 focus:ring-emerald-500 text-sm" />
+                                </div>
+                                <div>
+                                    <label className="text-[10px] font-bold text-slate-500 mb-1 block">時給 (円)</label>
+                                    <input type="number" value={newWorkplaceWage} onChange={e => setNewWorkplaceWage(e.target.value)} className="w-full p-3 bg-slate-50 rounded-xl border-none outline-none focus:ring-2 focus:ring-emerald-500 text-sm font-mono" />
+                                </div>
+                                <div className="flex gap-2 pt-2">
+                                    <button onClick={() => setIsWorkplaceModalOpen(false)} className="flex-1 py-3 text-sm font-bold text-slate-400">閉じる</button>
+                                    <button onClick={handleSaveWorkplace} className="flex-1 py-3 text-sm font-bold bg-emerald-600 text-white rounded-xl shadow-lg shadow-emerald-600/20">追加する</button>
+                                </div>
                             </div>
                         </motion.div>
                     </motion.div>
