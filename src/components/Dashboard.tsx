@@ -65,50 +65,35 @@ export default function Dashboard() {
             try {
                 let { data: accounts } = await supabase.from('accounts').select('*').eq('user_id', uid);
 
-                // SEEDING LOGIC: If tables are empty for THIS USER, seed them
-                if (!accounts || accounts.length === 0) {
-                    console.log("Seeding Supabase DB for user:", uid);
-                    const seedAccounts = MOCK_ASSETS.categories.flatMap(cat => cat.items.map(item => ({
-                        user_id: uid,
-                        category_id: cat.id,
-                        name: item.name,
-                        balance: item.balance,
-                        brand_color: (item as any).brandColor || null
-                    })));
-                    await supabase.from('accounts').insert(seedAccounts);
-                    const res = await supabase.from('accounts').select('*').eq('user_id', uid);
-                    accounts = res.data;
-
-                    const seedHistories = MOCK_HISTORY.map(h => ({
-                        user_id: uid,
-                        date: h.date,
-                        item: h.item,
-                        account: h.account || 'Unknown',
-                        amount: h.amount,
-                        balance: h.balance,
-                        type: h.type
-                    }));
-                    await supabase.from('histories').insert(seedHistories);
-                }
-
+                // NO SEEDING: Start with a clean slate
+                if (!accounts) accounts = [];
                 const { data: histories } = await supabase.from('histories').select('*').eq('user_id', uid).order('date', { ascending: false });
 
                 if (!isMounted) return;
 
                 // Reconstruct Assets State dynamically
+                const clonedAssets = JSON.parse(JSON.stringify(MOCK_ASSETS));
+                clonedAssets.totalAssets = 0;
+
                 if (accounts && accounts.length > 0) {
-                    const clonedAssets = JSON.parse(JSON.stringify(MOCK_ASSETS));
-                    clonedAssets.totalAssets = 0;
                     clonedAssets.categories.forEach((cat: any) => {
                         cat.items = accounts!.filter((a: any) => a.category_id === cat.id);
                         cat.total = cat.items.reduce((sum: number, c: any) => sum + Number(c.balance), 0);
                         clonedAssets.totalAssets += cat.total;
                     });
-                    setAssetsData(clonedAssets);
+                } else {
+                    // Empty state for categories
+                    clonedAssets.categories.forEach((cat: any) => {
+                        cat.items = [];
+                        cat.total = 0;
+                    });
                 }
+                setAssetsData(clonedAssets);
 
                 if (histories && histories.length > 0) {
                     setHistoryData(histories);
+                } else {
+                    setHistoryData([]);
                 }
             } catch (err) {
                 console.error("Supabase load error:", err);
