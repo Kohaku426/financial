@@ -603,6 +603,24 @@ function HomeTab({ historyData, assetsData, onEditTransaction }: { historyData: 
                 </div>
 
                 <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
+                    <h3 className="text-xs font-bold text-slate-400 uppercase tracking-[0.2em] mb-4">Cashflow Forecast</h3>
+                    <div className="h-32 w-full">
+                        <ResponsiveContainer width="100%" height="100%">
+                            <AreaChart data={Array.from({ length: 7 }).map((_, i) => ({ name: i, val: assetsData.totalAssets + (net * (i / 30)) }))}>
+                                <defs>
+                                    <linearGradient id="colorVal" x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="5%" stopColor="#4f46e5" stopOpacity={0.3} />
+                                        <stop offset="95%" stopColor="#4f46e5" stopOpacity={0} />
+                                    </linearGradient>
+                                </defs>
+                                <Area type="monotone" dataKey="val" stroke="#4f46e5" fillOpacity={1} fill="url(#colorVal)" strokeWidth={3} />
+                                <Tooltip hideCursor labelStyle={{ display: 'none' }} contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} formatter={(v: any) => `¥${Math.floor(v).toLocaleString()}`} />
+                            </AreaChart>
+                        </ResponsiveContainer>
+                    </div>
+                </div>
+
+                <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
                     <div className="flex justify-between items-center text-slate-700 mb-4">
                         <h3 className="font-bold">予算（変動費）</h3>
                         <button onClick={() => setIsBudgetModalOpen(true)} className="text-slate-400 hover:text-slate-600"><Settings size={16} /></button>
@@ -653,9 +671,9 @@ function HomeTab({ historyData, assetsData, onEditTransaction }: { historyData: 
                                     )}
                                 >
                                     <span className={cn("text-[10px] font-bold text-left", dayNum === 25 ? "text-white/80" : "text-slate-400")}>{dayNum}</span>
-                                    <div className="mt-auto flex flex-col items-end gap-0.5 pb-0.5">
-                                        {inc > 0 && <div className="w-1.5 h-1.5 rounded-full bg-blue-500" />}
-                                        {exp < 0 && <div className="w-1.5 h-1.5 rounded-full bg-rose-500" />}
+                                    <div className="mt-auto flex flex-col items-end gap-0">
+                                        {inc > 0 && <div className="text-[8px] text-blue-500 font-bold leading-none">+{Math.floor(inc / 1000)}k</div>}
+                                        {exp < 0 && <div className="text-[8px] text-rose-500 font-bold leading-none">-{Math.floor(Math.abs(exp) / 1000)}k</div>}
                                     </div>
                                 </div>
                             );
@@ -1107,11 +1125,20 @@ function AccountDetailView({ account, onClose, historyData, onUpdateAccount, onD
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
                                     <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold mb-1">締め日</p>
-                                    <input type="number" value={editClosingDay} onChange={e => setEditClosingDay(e.target.value)} placeholder="25" className="bg-slate-100 border border-slate-300 rounded-lg p-2 text-slate-900 font-mono w-full" />
+                                    <select value={editClosingDay} onChange={e => setEditClosingDay(e.target.value)} className="bg-slate-100 border border-slate-300 rounded-lg p-2 text-slate-900 text-sm w-full">
+                                        <option value="">未設定</option>
+                                        {Array.from({ length: 30 }).map((_, i) => <option key={i + 1} value={i + 1}>{i + 1}日</option>)}
+                                        <option value="31">月末</option>
+                                    </select>
                                 </div>
                                 <div>
                                     <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold mb-1">支払日</p>
-                                    <input type="number" value={editPaymentDay} onChange={e => setEditPaymentDay(e.target.value)} placeholder="10" className="bg-slate-100 border border-slate-300 rounded-lg p-2 text-slate-900 font-mono w-full" />
+                                    <div className="flex flex-col gap-1">
+                                        <input type="number" value={editPaymentDay} onChange={e => setEditPaymentDay(e.target.value)} placeholder="10" className="bg-slate-100 border border-slate-300 rounded-lg p-2 text-slate-900 font-mono w-full text-sm" />
+                                        <label className="flex items-center gap-2 text-[8px] font-bold text-slate-400 mt-1">
+                                            <input type="checkbox" checked={account.payment_adjustment === 'forward'} onChange={(e) => onUpdateAccount(account.id, { payment_adjustment: e.target.checked ? 'forward' : 'none' })} /> 土日なら後ろ倒し
+                                        </label>
+                                    </div>
                                 </div>
                             </div>
                         )}
@@ -1127,7 +1154,7 @@ function AccountDetailView({ account, onClose, historyData, onUpdateAccount, onD
                         </div>
                         {isCard && (account.closing_day || account.payment_day) && (
                             <div className="flex gap-4 mt-1">
-                                {account.closing_day && <p className="text-[10px] font-bold text-slate-400">締め: {account.closing_day}日</p>}
+                                {account.closing_day && <p className="text-[10px] font-bold text-slate-400">締め: {parseInt(String(account.closing_day), 10) === 31 ? '月末' : account.closing_day + '日'}</p>}
                                 {account.payment_day && <p className="text-[10px] font-bold text-slate-400">支払: {account.payment_day}日</p>}
                             </div>
                         )}
@@ -1651,7 +1678,8 @@ function SalaryTab({ shiftsData, setShiftsData, workplaces, setWorkplaces, user 
                         </div>
                         <div className="grid grid-cols-7 gap-1">
                             {['日', '月', '火', '水', '木', '金', '土'].map(d => <div key={d} className="text-[10px] font-bold text-slate-400 mb-2">{d}</div>)}
-                            {Array.from({ length: 31 }).map((_, i) => {
+                            {Array.from({ length: new Date(y, m - 1, 1).getDay() }).map((_, i) => <div key={'empty-' + i} className="h-10" />)}
+                            {Array.from({ length: new Date(y, m, 0).getDate() }).map((_, i) => {
                                 const d = i + 1;
                                 const dateStr = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
                                 const shift = shiftsData[dateStr];
@@ -1728,17 +1756,17 @@ function SalaryTab({ shiftsData, setShiftsData, workplaces, setWorkplaces, user 
                                 <div className="grid grid-cols-2 gap-4">
                                     <div>
                                         <label className="text-[10px] font-bold text-slate-500 mb-2 block">開始時間</label>
-                                        <input type="time" value={startTime} onChange={e => setStartTime(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-lg font-bold outline-none focus:border-emerald-500" />
+                                        <input type="time" value={startTime} onChange={e => setStartTime(e.target.value)} className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:border-emerald-500" />
                                     </div>
                                     <div>
                                         <label className="text-[10px] font-bold text-slate-500 mb-2 block">終了時間</label>
-                                        <input type="time" value={endTime} onChange={e => setEndTime(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-lg font-bold outline-none focus:border-emerald-500" />
+                                        <input type="time" value={endTime} onChange={e => setEndTime(e.target.value)} className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:border-emerald-500" />
                                     </div>
                                 </div>
 
                                 <div>
                                     <label className="text-[10px] font-bold text-slate-500 mb-2 block">休憩 (分)</label>
-                                    <input type="number" value={breakMinutes} onChange={e => setBreakMinutes(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-lg font-bold outline-none focus:border-emerald-500" />
+                                    <input type="number" value={breakMinutes} onChange={e => setBreakMinutes(e.target.value)} className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:border-emerald-500" />
                                 </div>
 
                                 <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100 flex justify-between items-center">
@@ -1772,17 +1800,17 @@ function SalaryTab({ shiftsData, setShiftsData, workplaces, setWorkplaces, user 
                                 <div className="grid grid-cols-2 gap-4">
                                     <div>
                                         <label className="text-[10px] font-bold text-slate-500 mb-2 block">開始時間</label>
-                                        <input type="time" value={startTime} onChange={e => setStartTime(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-lg font-bold outline-none focus:border-emerald-500" />
+                                        <input type="time" value={startTime} onChange={e => setStartTime(e.target.value)} className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:border-emerald-500" />
                                     </div>
                                     <div>
                                         <label className="text-[10px] font-bold text-slate-500 mb-2 block">終了時間</label>
-                                        <input type="time" value={endTime} onChange={e => setEndTime(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-lg font-bold outline-none focus:border-emerald-500" />
+                                        <input type="time" value={endTime} onChange={e => setEndTime(e.target.value)} className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:border-emerald-500" />
                                     </div>
                                 </div>
 
                                 <div>
                                     <label className="text-[10px] font-bold text-slate-500 mb-2 block">休憩 (分)</label>
-                                    <input type="number" value={breakMinutes} onChange={e => setBreakMinutes(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-lg font-bold outline-none focus:border-emerald-500" />
+                                    <input type="number" value={breakMinutes} onChange={e => setBreakMinutes(e.target.value)} className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:border-emerald-500" />
                                 </div>
 
                                 <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100 flex justify-between items-center">
