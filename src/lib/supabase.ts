@@ -1,9 +1,15 @@
 import { createClient } from '@supabase/supabase-js';
 
-let supabaseUrl = (process.env.NEXT_PUBLIC_SUPABASE_URL as string)?.trim().replace(/\/$/, '');
+// Sanitization function to remove quotes and trailing slashes
+const sanitize = (val: string | undefined) => {
+    if (!val) return '';
+    return val.trim().replace(/^["']|["']$/g, '').replace(/\/$/, '');
+};
+
+let supabaseUrl = sanitize(process.env.NEXT_PUBLIC_SUPABASE_URL);
 if (supabaseUrl && !supabaseUrl.startsWith('http')) {
     supabaseUrl = `https://${supabaseUrl}`;
 }
-const supabaseAnonKey = (process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY as string)?.trim();
+const supabaseAnonKey = sanitize(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
