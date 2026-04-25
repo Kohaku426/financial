@@ -5,6 +5,10 @@ export const metadata: Metadata = {
   title: 'Fin-Tech Assistant (Pro Edition)',
   description: 'Next-generation PWA for personal finance',
   manifest: '/manifest.json',
+  icons: {
+    icon: '/icon-512-v1.png',
+    apple: '/icon-512-v1.png',
+  },
 };
 
 export const viewport: Viewport = {

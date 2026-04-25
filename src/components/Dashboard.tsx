@@ -37,6 +37,7 @@ export default function Dashboard() {
     // ---- GLOBAL STATES ----
     const [activeTab, setActiveTab] = useState<TabType>('home');
     const [isAddTransactionOpen, setIsAddTransactionOpen] = useState(false);
+    const [editingTransaction, setEditingTransaction] = useState<any>(null);
 
     const [assetsData, setAssetsData] = useState(() => {
         const empty = JSON.parse(JSON.stringify(MOCK_ASSETS));
@@ -155,14 +156,15 @@ export default function Dashboard() {
                 </div>
             );
         }
+        const onEdit = (t: any) => { setEditingTransaction(t); setIsAddTransactionOpen(true); };
         switch (activeTab) {
-            case 'home': return <HomeTab historyData={historyData} assetsData={assetsData} />;
+            case 'home': return <HomeTab historyData={historyData} assetsData={assetsData} onEditTransaction={onEdit} />;
             case 'assets': return <AssetsTab user={user} expandedCategories={expandedCategories} toggleCategory={toggleCategory} assetsData={assetsData} setAssetsData={setAssetsData} historyData={historyData} onDeleteHistory={handleDeleteHistory} />;
             case 'salary': return <SalaryTab shiftsData={shiftsData} setShiftsData={setShiftsData} workplaces={workplaces} setWorkplaces={setWorkplaces} user={user} />;
-            case 'report': return <ReportTab historyData={historyData} onDeleteHistory={handleDeleteHistory} />;
-            case 'history': return <HistoryTab historyData={historyData} onDeleteHistory={handleDeleteHistory} assetsData={assetsData} />;
+            case 'report': return <ReportTab historyData={historyData} onDeleteHistory={handleDeleteHistory} onEditTransaction={onEdit} />;
+            case 'history': return <HistoryTab historyData={historyData} onDeleteHistory={handleDeleteHistory} assetsData={assetsData} onEditTransaction={onEdit} />;
             case 'ai': return <AITab historyData={historyData} assetsData={assetsData} user={user} />;
-            default: return <HomeTab historyData={historyData} assetsData={assetsData} />;
+            default: return <HomeTab historyData={historyData} assetsData={assetsData} onEditTransaction={onEdit} />;
         }
     };
 
@@ -216,7 +218,7 @@ export default function Dashboard() {
             <AnimatePresence>
                 {isAddTransactionOpen && (
                     <AddTransactionModal
-                        onClose={() => setIsAddTransactionOpen(false)}
+                        onClose={() => { setIsAddTransactionOpen(false); setEditingTransaction(null); }}
                         incomeCategories={incomeCategories}
                         setIncomeCategories={setIncomeCategories}
                         expenseCategories={expenseCategories}
@@ -225,6 +227,7 @@ export default function Dashboard() {
                         setAssetsData={setAssetsData}
                         setHistoryData={setHistoryData}
                         user={user}
+                        editingTransaction={editingTransaction}
                     />
                 )}
             </AnimatePresence>
@@ -263,18 +266,20 @@ export default function Dashboard() {
 // ----------------------------------------------------------------------
 // ADD TRANSACTION MODAL
 // ----------------------------------------------------------------------
-function AddTransactionModal({ onClose, incomeCategories, setIncomeCategories, expenseCategories, setExpenseCategories, assetsData, setAssetsData, setHistoryData, user }: any) {
-    const [amount, setAmount] = useState('');
-    const [account, setAccount] = useState('三菱UFJ銀行');
-    const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
-    const [isIncome, setIsIncome] = useState(false);
+function AddTransactionModal({ onClose, incomeCategories, setIncomeCategories, expenseCategories, setExpenseCategories, assetsData, setAssetsData, setHistoryData, user, editingTransaction }: any) {
+    const [amount, setAmount] = useState(editingTransaction ? Math.abs(editingTransaction.amount).toString() : '');
+    const [account, setAccount] = useState(editingTransaction ? editingTransaction.account : '三菱UFJ銀行');
+    const [date, setDate] = useState(editingTransaction ? editingTransaction.date : new Date().toISOString().split('T')[0]);
+    const [isIncome, setIsIncome] = useState(editingTransaction ? editingTransaction.amount > 0 : false);
     const displayedCategories = isIncome ? incomeCategories : expenseCategories;
-    const [category, setCategory] = useState(expenseCategories[0]);
-    const [memo, setMemo] = useState('');
+    const [category, setCategory] = useState(editingTransaction ? (editingTransaction.item.includes(' - ') ? editingTransaction.item.split(' - ')[0] : editingTransaction.item) : expenseCategories[0]);
+    const [memo, setMemo] = useState(editingTransaction ? (editingTransaction.item.includes(' - ') ? editingTransaction.item.split(' - ')[1] : '') : '');
     const [isAdvance, setIsAdvance] = useState(false);
 
     const [isMultiDate, setIsMultiDate] = useState(false);
     const [selectedDates, setSelectedDates] = useState<string[]>([]);
+    const [isOcrLoading, setIsOcrLoading] = useState(false);
+    const fileInputRef = useRef<HTMLInputElement>(null);
 
     const handleSave = async () => {
         if (!amount || !user) return;
@@ -282,75 +287,109 @@ function AddTransactionModal({ onClose, incomeCategories, setIncomeCategories, e
         const numAmount = parseInt(amount, 10) * (isIncome ? 1 : -1);
 
         const datesToProcess = isMultiDate && selectedDates.length > 0 ? selectedDates : [date];
-
-        // Find existing balance to simulate proper new balance for history
-        const cat = assetsData.categories.find((c: any) => c.items.some((i: any) => i.name === account));
-        const acctObj = cat?.items.find((i: any) => i.name === account);
-        const currentBalance = acctObj?.balance || 0;
-
-        let dbTransactions: any[] = [];
         let finalAssets = JSON.parse(JSON.stringify(assetsData));
 
-        datesToProcess.forEach((d, idx) => {
-            const baseId = (Date.now() + idx).toString();
-            const currentEntryAmount = numAmount;
-            const entryBalance = currentBalance + (numAmount * (idx + 1));
+        // Helper to update account balance on server & locally
+        const syncAccountBalance = async (accName: string, diff: number) => {
+            const targetCat = finalAssets.categories.find((c: any) => c.items.some((i: any) => i.name === accName));
+            if (targetCat) {
+                const acct = targetCat.items.find((i: any) => i.name === accName);
+                if (acct) {
+                    acct.balance = Number(acct.balance) + diff;
+                    targetCat.total = targetCat.items.reduce((sum: number, i: any) => sum + Number(i.balance), 0);
+                    finalAssets.totalAssets = finalAssets.categories.reduce((sum: number, c: any) => sum + Number(c.total), 0);
 
-            dbTransactions.push({
-                user_id: uid,
-                date: d,
-                item: memo ? `${category} - ${memo}` : category,
-                account,
-                amount: currentEntryAmount,
-                balance: entryBalance,
-                type: isIncome ? 'income' : 'expense'
-            });
-
-            if (isAdvance && !isIncome) {
-                dbTransactions.push({
-                    user_id: uid,
-                    date: d,
-                    item: `立替記録 (${memo || category})`,
-                    account: '立替金',
-                    amount: Math.abs(numAmount),
-                    balance: 0,
-                    type: 'income'
-                });
-
-                let advanceCategory = finalAssets.categories.find((c: any) => c.id === 'advances');
-                if (!advanceCategory) {
-                    advanceCategory = { id: 'advances', name: '立替金', total: 0, color: COLORS.success, items: [] };
-                    finalAssets.categories.push(advanceCategory);
+                    // Persist to DB
+                    await supabase.from('accounts').update({ balance: acct.balance }).eq('id', acct.id);
                 }
-                advanceCategory.total += Math.abs(numAmount);
-                finalAssets.totalAssets += Math.abs(numAmount);
-                advanceCategory.items.push({ id: baseId + '-item', name: `立替: ${memo || category}`, balance: Math.abs(numAmount) });
             }
-        });
-
-        // Also update the actual account balance in assetsData for the selected account
-        const targetCategory = finalAssets.categories.find((c: any) => c.items.some((i: any) => i.name === account));
-        if (targetCategory) {
-            const acct = targetCategory.items.find((i: any) => i.name === account);
-            if (acct) {
-                acct.balance = Number(acct.balance) + (numAmount * datesToProcess.length);
-                targetCategory.total = targetCategory.items.reduce((sum: number, i: any) => sum + Number(i.balance), 0);
-                finalAssets.totalAssets = finalAssets.categories.reduce((sum: number, c: any) => sum + Number(c.total), 0);
-            }
-        }
+        };
 
         try {
-            const { data, error } = await supabase.from('histories').insert(dbTransactions).select();
-            if (error) throw error;
-            if (data) {
-                setHistoryData((prev: any) => [...data, ...prev].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
-                if (isAdvance && !isIncome) setAssetsData(finalAssets);
+            if (editingTransaction) {
+                // Revert old amount
+                await syncAccountBalance(editingTransaction.account, -editingTransaction.amount);
+                // Apply new amount
+                await syncAccountBalance(account, numAmount);
+
+                const { data, error } = await supabase.from('histories').update({
+                    date,
+                    item: memo ? `${category} - ${memo}` : category,
+                    account,
+                    amount: numAmount,
+                    type: isIncome ? 'income' : 'expense'
+                }).eq('id', editingTransaction.id).select();
+
+                if (error) throw error;
+                if (data) setHistoryData((prev: any) => prev.map((h: any) => h.id === editingTransaction.id ? data[0] : h));
+
+            } else {
+                let dbTransactions: any[] = [];
+                for (const d of datesToProcess) {
+                    dbTransactions.push({
+                        user_id: uid,
+                        date: d,
+                        item: memo ? `${category} - ${memo}` : category,
+                        account,
+                        amount: numAmount,
+                        type: isIncome ? 'income' : 'expense'
+                    });
+
+                    await syncAccountBalance(account, numAmount);
+
+                    if (isAdvance && !isIncome) {
+                        // Reimbursement handling
+                        const advanceCategory = finalAssets.categories.find((c: any) => c.id === 'advances');
+                        // Simplified: assuming '立替金' account exists
+                        const advAcc = advanceCategory?.items.find((i: any) => i.name === '立替金');
+                        if (advAcc) {
+                            await syncAccountBalance('立替金', Math.abs(numAmount));
+                        }
+                    }
+                }
+                const { data, error } = await supabase.from('histories').insert(dbTransactions).select();
+                if (error) throw error;
+                if (data) setHistoryData((prev: any) => [...data, ...prev].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
             }
+
+            setAssetsData(finalAssets);
             onClose();
         } catch (err) {
             console.error("Failed to save transaction:", err);
             alert("保存に失敗しました");
         }
+    };
+
+    const handleCameraClick = () => fileInputRef.current?.click();
+
+    const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        setIsOcrLoading(true);
+        const reader = new FileReader();
+        reader.onloadend = async () => {
+            try {
+                const base64 = reader.result as string;
+                const res = await fetch('/api/ocr', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ image: base64 })
+                });
+                const data = await res.json();
+                if (data.amount) setAmount(data.amount.toString());
+                if (data.date) setDate(data.date);
+                if (data.item) setMemo(data.item);
+                if (data.category && (incomeCategories.includes(data.category) || expenseCategories.includes(data.category))) {
+                    setCategory(data.category);
+                }
+            } catch (err) {
+                console.error("OCR failed:", err);
+            } finally {
+                setIsOcrLoading(false);
+            }
+        };
+        reader.readAsDataURL(file);
     };
 
     return (
@@ -371,7 +410,11 @@ function AddTransactionModal({ onClose, incomeCategories, setIncomeCategories, e
                         <label className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1 block">金額</label>
                         <div className="relative">
                             <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 text-xl font-mono">¥</span>
-                            <input type="number" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0" className={cn("w-full bg-slate-50 border border-slate-200 rounded-xl py-4 pl-12 pr-4 text-3xl font-mono focus:border-slate-400 focus:bg-white outline-none transition-all", !isIncome ? "text-slate-900" : "text-cyan-600")} autoFocus />
+                            <input type="number" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0" className={cn("w-full bg-slate-50 border border-slate-200 rounded-xl py-4 pl-12 pr-12 text-3xl font-mono focus:border-slate-400 focus:bg-white outline-none transition-all", !isIncome ? "text-slate-900" : "text-cyan-600")} autoFocus />
+                            <button onClick={handleCameraClick} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-2">
+                                {isOcrLoading ? <Loader2 size={24} className="animate-spin text-indigo-500" /> : <Camera size={24} />}
+                            </button>
+                            <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleFileChange} />
                         </div>
                     </div>
 
@@ -444,7 +487,7 @@ function AddTransactionModal({ onClose, incomeCategories, setIncomeCategories, e
                     </div>
 
                     <button onClick={handleSave} className="w-full bg-slate-900 hover:bg-slate-800 text-white shadow-xl font-bold py-4 rounded-xl mt-4 transition-all active:scale-[0.98]">
-                        {isMultiDate ? `${selectedDates.length}件の記録を一括保存` : '記録を保存'}
+                        {editingTransaction ? '変更を保存' : (isMultiDate ? `${selectedDates.length}件の記録を一括保存` : '記録を保存')}
                     </button>
                 </div>
             </motion.div>
@@ -455,7 +498,7 @@ function AddTransactionModal({ onClose, incomeCategories, setIncomeCategories, e
 // ----------------------------------------------------------------------
 // HOME TAB (Money Forward ME Clone)
 // ----------------------------------------------------------------------
-function HomeTab({ historyData, assetsData }: { historyData: any[], assetsData: any }) {
+function HomeTab({ historyData, assetsData, onEditTransaction }: { historyData: any[], assetsData: any, onEditTransaction: (t: any) => void }) {
     const [isGroupModalOpen, setIsGroupModalOpen] = useState(false);
     const [groupNameInput, setGroupNameInput] = useState('');
 
@@ -466,31 +509,24 @@ function HomeTab({ historyData, assetsData }: { historyData: any[], assetsData: 
         { name: '電子マネー除外', ids: ['acc1', 'acc2', 'acc3', 'acc6', 'acc7'] }
     ]);
     const [selectedGroupIndex, setSelectedGroupIndex] = useState(0);
-    const [tempIds, setTempIds] = useState<string[]>([]);
 
     const [isBudgetModalOpen, setIsBudgetModalOpen] = useState(false);
     const [budgetLimits, setBudgetLimits] = useState<Record<string, number>>({ '食費': 40000, '交際費': 15000, '交通費': 10000 });
 
     const currentGroup = assetGroups[selectedGroupIndex];
 
-    // Calculate filtered total assets
-    const filteredTotalAssets = useMemo(() => {
-        if (!currentGroup || !currentGroup.ids) return assetsData.totalAssets;
-        return assetsData.categories.flatMap((c: any) => c.items)
-            .filter((i: any) => currentGroup.ids!.includes(i.id))
-            .reduce((sum: number, i: any) => sum + Number(i.balance), 0);
-    }, [currentGroup, assetsData]);
-
     // Calculate current month's income/expense
-    const [monthOffset] = useState(0);
     const currentDate = new Date();
-    currentDate.setMonth(currentDate.getMonth() + monthOffset);
     const currentMonthStr = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
 
     const monthEvents = historyData.filter(h => h.date.startsWith(currentMonthStr));
     const income = monthEvents.filter(h => h.amount > 0).reduce((sum, h) => sum + h.amount, 0);
     const expense = monthEvents.filter(h => h.amount < 0).reduce((sum, h) => sum + Math.abs(h.amount), 0);
     const net = income - expense;
+
+    // Detailed Transaction View for Home Calendar
+    const [selectedHomeDate, setSelectedHomeDate] = useState<string | null>(null);
+    const dayTransactions = historyData.filter(h => h.date === selectedHomeDate);
 
     // Shared Category Logic
     const getCategory = (item: string) => {
@@ -503,18 +539,15 @@ function HomeTab({ historyData, assetsData }: { historyData: any[], assetsData: 
         return 'その他';
     };
 
-    // Calculate grouping for Donut Chart
     const expByCategory: Record<string, number> = {};
     monthEvents.filter(h => h.amount < 0).forEach(h => {
         const cat = getCategory(h.item);
         expByCategory[cat] = (expByCategory[cat] || 0) + Math.abs(h.amount);
     });
 
-    // Sort pie data largest to smallest
     const pieData = Object.keys(expByCategory).map(name => ({ name, value: expByCategory[name] })).sort((a, b) => b.value - a.value);
     const PIE_COLORS = ['#4f46e5', '#ec4899', '#f59e0b', '#3b82f6', '#10b981', '#8b5cf6', '#64748b'];
 
-    // Budget Logic
     const totalBudget = Object.values(budgetLimits).reduce((a, b) => a + b, 0);
     const totalBudgetExpense = Object.keys(budgetLimits).reduce((a, k) => a + (expByCategory[k] || 0), 0);
     const mainOverBudget = totalBudgetExpense > totalBudget;
@@ -522,32 +555,23 @@ function HomeTab({ historyData, assetsData }: { historyData: any[], assetsData: 
     return (
         <>
             <div className="space-y-4 pt-2 pb-16 bg-slate-100 min-h-screen -m-3 md:-m-6 p-4">
-
-                {/* Total Assets Card */}
                 <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm mt-4">
-                    <div className="flex justify-between items-center mb-4 text-slate-700">
-                        <h3 className="font-bold">総資産</h3>
+                    <div className="flex justify-between items-center mb-4 text-slate-700 font-bold text-xs uppercase tracking-widest opacity-60">
+                        <h3>総資産</h3>
                     </div>
                     <div className="text-right">
-                        <p className="text-4xl font-sans tracking-tighter text-slate-900">
-                            <span className="text-2xl mr-0.5">¥</span>
+                        <p className="text-4xl font-sans font-black tracking-tighter text-slate-900">
+                            <span className="text-2xl mr-1 opacity-50 font-medium">¥</span>
                             {assetsData.totalAssets.toLocaleString()}
-                        </p>
-                        <p className="text-sm font-bold text-slate-500 mt-2">
-                            前月比 <span className="text-blue-500 ml-1">¥+12,000</span>
-                            <ArrowUpRight size={14} className="inline text-blue-500 relative -top-0.5" />
                         </p>
                     </div>
                 </div>
 
-                {/* Household Budget (Donut Chart) Card */}
                 <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
                     <div className="flex justify-between items-center text-slate-700 mb-2">
                         <h3 className="font-bold flex items-center gap-2">家計簿 <span className="text-xs font-normal text-slate-500">{currentDate.getMonth() + 1}月1日〜末日</span></h3>
                     </div>
-
                     <div className="flex items-center mt-6">
-                        {/* Donut Chart */}
                         <div className="w-[120px] h-[120px] relative shrink-0">
                             {pieData.length > 0 ? (
                                 <ResponsiveContainer width="100%" height="100%">
@@ -561,7 +585,6 @@ function HomeTab({ historyData, assetsData }: { historyData: any[], assetsData: 
                                 <div className="w-full h-full rounded-full border-[15px] border-slate-100" />
                             )}
                         </div>
-                        {/* Data Summary */}
                         <div className="flex-1 ml-4 space-y-3 font-sans">
                             <div className="flex justify-between items-center text-sm">
                                 <span className="text-slate-500">収入</span>
@@ -579,23 +602,11 @@ function HomeTab({ historyData, assetsData }: { historyData: any[], assetsData: 
                     </div>
                 </div>
 
-                {/* Budget Progress Card (Categorized) */}
                 <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
                     <div className="flex justify-between items-center text-slate-700 mb-4">
-                        <h3 className="font-bold">予算（変動費） <span className="text-xs font-normal text-slate-500 ml-1">あと6日</span></h3>
+                        <h3 className="font-bold">予算（変動費）</h3>
                         <button onClick={() => setIsBudgetModalOpen(true)} className="text-slate-400 hover:text-slate-600"><Settings size={16} /></button>
                     </div>
-
-                    <div className="flex justify-between text-sm mb-2 opacity-80">
-                        <span className="text-slate-700 font-bold text-xs uppercase tracking-widest">総予算状況</span>
-                        <span className={cn("font-bold text-sm", mainOverBudget ? "text-rose-500" : "text-emerald-500")}>
-                            {mainOverBudget ? '-' : ''}¥{Math.abs(totalBudget - totalBudgetExpense).toLocaleString()}
-                        </span>
-                    </div>
-                    <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden mb-6">
-                        <div className={cn("h-full", mainOverBudget ? "bg-rose-500" : "bg-emerald-500")} style={{ width: `${Math.min((totalBudgetExpense / totalBudget) * 100, 100)}%` }} />
-                    </div>
-
                     <div className="space-y-4">
                         {Object.keys(budgetLimits).map(catKey => {
                             const lim = budgetLimits[catKey];
@@ -616,14 +627,13 @@ function HomeTab({ historyData, assetsData }: { historyData: any[], assetsData: 
                     </div>
                 </div>
 
-                {/* Giant Calendar */}
-                <div className="bg-white border text-center border-slate-200 rounded-xl p-5 shadow-sm">
-                    <h3 className="text-xs font-bold text-slate-900/70 mb-3 flex items-center gap-2 uppercase tracking-widest">
+                <div className="bg-white border text-center border-slate-200 rounded-xl p-5 shadow-sm overflow-hidden">
+                    <h3 className="text-xs font-bold text-slate-900/40 mb-4 flex items-center gap-2 uppercase tracking-[0.2em]">
                         <CalendarDays size={14} /> April 2026
                     </h3>
                     <div className="grid grid-cols-7 gap-1">
                         {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day, i) => (
-                            <div key={i} className="text-[10px] text-center text-slate-400 font-bold mb-1">{day}</div>
+                            <div key={i} className="text-[10px] text-center text-slate-400 font-bold mb-2">{day}</div>
                         ))}
                         {Array(3).fill(null).map((_, i) => <div key={'empty-' + i} className="p-1" />)}
                         {Array.from({ length: 30 }).map((_, i) => {
@@ -636,153 +646,46 @@ function HomeTab({ historyData, assetsData }: { historyData: any[], assetsData: 
                             return (
                                 <div
                                     key={dayNum}
+                                    onClick={() => (inc > 0 || exp < 0) && setSelectedHomeDate(dateStr)}
                                     className={cn(
-                                        "relative flex flex-col p-1 rounded-lg border transition-all h-[55px]",
-                                        dayNum === 25 ? "bg-slate-100 border-slate-300" : "bg-transparent border-slate-50 hover:bg-slate-50",
-                                        (inc > 0 || exp < 0) ? "cursor-pointer shadow-sm" : ""
+                                        "relative flex flex-col p-1 rounded-xl border transition-all h-[58px] cursor-pointer",
+                                        dayNum === 25 ? "bg-slate-900 border-slate-900 text-white" : "bg-white border-slate-50 hover:border-slate-300 shadow-sm",
                                     )}
                                 >
-                                    <span className={cn(
-                                        "text-[10px] font-bold text-left",
-                                        dayNum === 25 ? "text-slate-900" : "text-slate-500"
-                                    )}>
-                                        {dayNum}
-                                    </span>
-                                    <div className="mt-auto flex flex-col justify-end text-right">
-                                        {inc > 0 && <span className="text-[8px] sm:text-[9px] font-bold text-blue-500 tabular-nums leading-none tracking-tighter truncate">+{inc.toLocaleString()}</span>}
-                                        {exp < 0 && <span className="text-[8px] sm:text-[9px] font-bold text-rose-500 tabular-nums leading-none tracking-tighter truncate">{exp.toLocaleString()}</span>}
+                                    <span className={cn("text-[10px] font-bold text-left", dayNum === 25 ? "text-white/80" : "text-slate-400")}>{dayNum}</span>
+                                    <div className="mt-auto flex flex-col items-end gap-0.5 pb-0.5">
+                                        {inc > 0 && <div className="w-1.5 h-1.5 rounded-full bg-blue-500" />}
+                                        {exp < 0 && <div className="w-1.5 h-1.5 rounded-full bg-rose-500" />}
                                     </div>
                                 </div>
                             );
                         })}
                     </div>
                 </div>
-
-                {/* Future Cashflow Prediction */}
-                <div className="bg-white border text-center border-slate-200 rounded-xl p-5 shadow-sm">
-                    <div className="flex justify-between items-center mb-4">
-                        <h3 className="font-bold flex items-center gap-2"><Wallet size={16} className="text-slate-500" /> 将来のキャッシュフロー予測</h3>
-                    </div>
-                    <div className="glass-panel p-0 border border-slate-100 rounded-xl bg-slate-50 overflow-hidden divide-y divide-slate-100 text-left">
-                        <div className="p-4 flex justify-between items-center bg-blue-50/50">
-                            <div className="flex flex-col items-start gap-1">
-                                <span className="text-xs font-bold text-slate-700 tracking-tight">現在の残高</span>
-                                <select value={selectedGroupIndex} onChange={(e) => {
-                                    if (e.target.value === 'new') {
-                                        setTempIds(assetsData.categories.flatMap((c: any) => c.items).map((i: any) => i.id));
-                                        setIsGroupModalOpen(true);
-                                    } else {
-                                        setSelectedGroupIndex(Number(e.target.value));
-                                    }
-                                }} className="text-[10px] bg-white border border-blue-200 text-blue-700 font-bold rounded px-1 min-w-[100px] outline-none">
-                                    {assetGroups.map((g, idx) => <option key={g.name} value={idx}>{g.name}</option>)}
-                                    <option value="new">＋ 新しいグループを設定...</option>
-                                </select>
-                            </div>
-                            <span className="text-lg font-black font-mono tabular-nums tracking-tighter text-slate-900 drop-shadow-sm">
-                                ¥{filteredTotalAssets.toLocaleString()}
-                            </span>
-                        </div>
-                        {historyData
-                            .filter(h => new Date(h.date) > new Date('2026-04-25T00:00:00+09:00'))
-                            .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
-                            .slice(0, 4)
-                            .reduce((acc, row) => {
-                                const newBal = acc.bal + row.amount;
-                                acc.arr.push(
-                                    <div key={row.id || row.date + row.item} className="p-3 py-3 flex justify-between items-center bg-white hover:bg-slate-50 transition-colors">
-                                        <div className="flex flex-col flex-1 truncate pr-2">
-                                            <span className="text-xs font-bold text-slate-800 truncate">{row.item}</span>
-                                            <span className="text-[9px] text-slate-400 font-mono tracking-widest mt-0.5">{row.date.replace(/-/g, '/')}</span>
-                                        </div>
-                                        <div className="flex flex-col items-end shrink-0">
-                                            <span className={cn("text-sm font-bold font-mono tracking-tighter tabular-nums", row.amount > 0 ? "text-blue-500" : "text-rose-500")}>
-                                                {row.amount > 0 ? '+' : ''}{row.amount.toLocaleString()}
-                                            </span>
-                                            <span className="text-[9px] text-slate-400 font-mono tracking-tight flex items-center gap-1 mt-0.5">
-                                                ➔ ¥{newBal.toLocaleString()}
-                                            </span>
-                                        </div>
-                                    </div>
-                                );
-                                acc.bal = newBal;
-                                return acc;
-                            }, { bal: filteredTotalAssets, arr: [] as any[] }).arr
-                        }
-                    </div>
-                </div>
-
             </div>
 
             <AnimatePresence>
-                {isBudgetModalOpen && (
-                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-                        <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }} className="bg-white rounded-2xl w-full max-w-sm overflow-hidden shadow-2xl flex flex-col">
-                            <div className="bg-slate-100 px-4 py-3 flex justify-between items-center border-b border-slate-200">
-                                <h3 className="font-bold text-slate-800 text-sm">カテゴリ別予算設定</h3>
-                                <button onClick={() => setIsBudgetModalOpen(false)} className="text-slate-400 hover:text-slate-600"><X size={18} /></button>
+                {selectedHomeDate && (
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[100] flex items-end sm:items-center justify-center p-0 sm:p-4">
+                        <motion.div initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }} transition={{ type: "spring", damping: 30, stiffness: 300 }} className="bg-white border border-slate-200 w-full max-w-md rounded-t-3xl sm:rounded-3xl p-6 shadow-2xl relative max-h-[80vh] overflow-y-auto">
+                            <div className="flex justify-between items-center mb-6">
+                                <h3 className="text-xl font-bold text-slate-900">{selectedHomeDate.split('-')[1]}月{selectedHomeDate.split('-')[2]}日の取引</h3>
+                                <button onClick={() => setSelectedHomeDate(null)} className="text-slate-500 hover:text-slate-900 p-2 bg-slate-50 rounded-full"><X size={20} /></button>
                             </div>
-                            <div className="bg-slate-50 border border-slate-200 rounded-lg max-h-[300px] overflow-y-auto p-2 space-y-2">
-                                {EXPENSE_CATEGORIES.map(k => (
-                                    <div key={k} className="flex justify-between items-center bg-white border border-slate-100 rounded-lg p-3 shadow-sm hover:border-blue-200 transition-colors">
-                                        <span className="font-bold text-[13px] text-slate-700 w-1/3">{k}</span>
-                                        <div className="relative w-2/3">
-                                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-mono">¥</span>
-                                            <input type="number"
-                                                value={budgetLimits[k] || ''}
-                                                placeholder="未設定"
-                                                onChange={(e) => {
-                                                    const val = parseInt(e.target.value, 10);
-                                                    setBudgetLimits(p => ({ ...p, [k]: isNaN(val) ? 0 : val }));
-                                                }} className="w-full pl-7 pr-3 py-1.5 rounded-md border border-slate-200 focus:border-blue-500 outline-none text-sm font-bold text-slate-800 text-right tabular-nums bg-slate-50/50" />
+                            <div className="space-y-3">
+                                {dayTransactions.length > 0 ? dayTransactions.map((h: any) => (
+                                    <div key={h.id} onClick={() => { setSelectedHomeDate(null); onEditTransaction(h); }} className="p-4 bg-slate-50 rounded-2xl flex justify-between items-center hover:bg-slate-100 transition-colors cursor-pointer active:scale-95 transition-transform">
+                                        <div className="flex flex-col">
+                                            <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">{h.account}</span>
+                                            <span className="font-bold text-slate-800">{h.item}</span>
                                         </div>
+                                        <span className={cn("font-mono font-bold text-lg", h.amount > 0 ? "text-blue-600" : "text-slate-900")}>
+                                            {h.amount > 0 ? '+' : ''}{h.amount.toLocaleString()}
+                                        </span>
                                     </div>
-                                ))}
-                            </div>
-                            <div className="p-4 border-t border-slate-100">
-                                <button onClick={() => setIsBudgetModalOpen(false)} className="w-full bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white font-bold py-3 rounded-xl transition-all shadow-md">予算設定を保存して閉じる</button>
-                            </div>
-                        </motion.div>
-                    </motion.div>
-                )}
-
-                {isGroupModalOpen && (
-                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-                        <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }} className="bg-white rounded-2xl w-full max-w-sm overflow-hidden shadow-2xl">
-                            <div className="bg-slate-100 px-4 py-3 flex justify-between items-center border-b border-slate-200">
-                                <h3 className="font-bold text-slate-800 text-sm">新しい資産グループ</h3>
-                                <button onClick={() => setIsGroupModalOpen(false)} className="text-slate-400 hover:text-slate-600"><X size={18} /></button>
-                            </div>
-                            <div className="p-4 space-y-4">
-                                <div>
-                                    <label className="text-[10px] font-bold text-slate-500 mb-1 block">グループ名</label>
-                                    <input type="text" value={groupNameInput} onChange={e => setGroupNameInput(e.target.value)} placeholder="例: 共有口座" className="w-full rounded-md border border-slate-200 p-2 text-sm focus:border-blue-500 outline-none" />
-                                </div>
-                                <div>
-                                    <label className="text-[10px] font-bold text-slate-500 mb-1 block">対象の口座を選択</label>
-                                    <div className="bg-slate-50 border border-slate-200 rounded-lg max-h-32 overflow-y-auto p-2 space-y-2">
-                                        {assetsData.categories.flatMap((c: any) => c.items).map((item: any) => (
-                                            <div key={item.id} className="flex items-center gap-2">
-                                                <input type="checkbox" checked={tempIds.includes(item.id)} onChange={e => {
-                                                    if (e.target.checked) setTempIds(p => [...p, item.id]);
-                                                    else setTempIds(p => p.filter(id => id !== item.id));
-                                                }} className="rounded border-slate-300 text-blue-600" />
-                                                <span className="text-xs text-slate-700 font-bold">{item.name}</span>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                            </div>
-                            <div className="p-4 border-t border-slate-100">
-                                <button onClick={() => {
-                                    if (groupNameInput.trim()) {
-                                        const newGroup = { name: groupNameInput.trim(), ids: [...tempIds] };
-                                        setAssetGroups(prev => [...prev, newGroup]);
-                                        setSelectedGroupIndex(assetGroups.length);
-                                    }
-                                    setGroupNameInput('');
-                                    setIsGroupModalOpen(false);
-                                }} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-lg transition-colors">作成する</button>
+                                )) : (
+                                    <p className="text-center py-10 text-slate-400 font-bold">この日の取引はありません</p>
+                                )}
                             </div>
                         </motion.div>
                     </motion.div>
@@ -792,10 +695,11 @@ function HomeTab({ historyData, assetsData }: { historyData: any[], assetsData: 
     );
 }
 
+
 // ----------------------------------------------------------------------
 // REPORT TAB (Money Forward ME "家計簿/レポート" Clone)
 // ----------------------------------------------------------------------
-function ReportTab({ historyData, onDeleteHistory }: { historyData: any[], onDeleteHistory: (id: string | number) => void }) {
+function ReportTab({ historyData, onDeleteHistory, onEditTransaction }: { historyData: any[], onDeleteHistory: (id: string | number) => void, onEditTransaction: (t: any) => void }) {
     const [viewType, setViewType] = useState<'expense' | 'income'>('expense');
     const [viewMode, setViewMode] = useState<'month' | 'year'>('month');
     const [reportMonthOffset, setReportMonthOffset] = useState(0);
@@ -946,7 +850,7 @@ function ReportTab({ historyData, onDeleteHistory }: { historyData: any[], onDel
                                 <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4">最近の入出金 (削除可能)</h3>
                                 <div className="space-y-2">
                                     {monthlyHistory.map((h: any) => (
-                                        <div key={h.id} className="bg-slate-50 border border-slate-100 rounded-xl p-4 flex justify-between items-center group transition-all hover:bg-rose-50/20 hover:border-rose-100">
+                                        <div key={h.id} onClick={() => onEditTransaction(h)} className="bg-slate-50 border border-slate-100 rounded-xl p-4 flex justify-between items-center group transition-all hover:bg-slate-100 cursor-pointer">
                                             <div className="flex flex-col">
                                                 <span className="text-[10px] text-slate-400 font-bold mb-0.5">{h.date}</span>
                                                 <span className="text-sm font-bold text-slate-700">{h.item}</span>
@@ -1043,7 +947,7 @@ function ReportTab({ historyData, onDeleteHistory }: { historyData: any[], onDel
 // ----------------------------------------------------------------------
 // HISTORY "FUTURE" LOG TAB (Money Forward ME Clone)
 // ----------------------------------------------------------------------
-function HistoryTab({ historyData, onDeleteHistory, assetsData }: { historyData: any[], onDeleteHistory: (id: string | number) => void, assetsData: any }) {
+function HistoryTab({ historyData, onDeleteHistory, assetsData, onEditTransaction }: { historyData: any[], onDeleteHistory: (id: string | number) => void, assetsData: any, onEditTransaction: (t: any) => void }) {
     // Group transactions by Date
     const groupedDate: Record<string, any[]> = {};
     historyData.forEach(h => {
@@ -1097,7 +1001,7 @@ function HistoryTab({ historyData, onDeleteHistory, assetsData }: { historyData:
                             {groupedDate[date].map(row => {
                                 const { icon: ItemIcon, color, bg, border } = getIconForHistory(row.item, row.amount);
                                 return (
-                                    <div key={row.id} className="flex justify-between items-center px-4 py-3 hover:bg-slate-50 transition-colors">
+                                    <div key={row.id} onClick={() => onEditTransaction(row)} className="flex justify-between items-center px-4 py-3 hover:bg-slate-50 transition-colors cursor-pointer">
                                         <div className="flex items-center gap-3 overflow-hidden">
                                             <div className={cn("w-8 h-8 rounded-full border-2 flex items-center justify-center shrink-0", bg, border)}>
                                                 <ItemIcon size={14} className={color} strokeWidth={2.5} />
@@ -1497,12 +1401,27 @@ function SalaryTab({ shiftsData, setShiftsData, workplaces, setWorkplaces, user 
     const [targetInput, setTargetInput] = useState(targetAmount.toString());
 
     const [shiftModalDate, setShiftModalDate] = useState<string | null>(null);
-    const [shiftHourInput, setShiftHourInput] = useState("8");
+    const [startTime, setStartTime] = useState("10:00");
+    const [endTime, setEndTime] = useState("19:00");
+    const [breakMinutes, setBreakMinutes] = useState("60");
     const [selectedWorkplaceId, setSelectedWorkplaceId] = useState<string>("");
+
+    // Helper to calculate hours from times
+    const calcHours = (s: string, e: string, b: string) => {
+        if (!s || !e) return 0;
+        const [sH, sM] = s.split(':').map(Number);
+        const [eH, eM] = e.split(':').map(Number);
+        let startMin = sH * 60 + sM;
+        let endMin = eH * 60 + eM;
+        if (endMin < startMin) endMin += 24 * 60; // Overnight
+        const total = endMin - startMin - (parseInt(b, 10) || 0);
+        return Math.max(0, total / 60);
+    };
 
     const [isWorkplaceModalOpen, setIsWorkplaceModalOpen] = useState(false);
     const [newWorkplaceName, setNewWorkplaceName] = useState("");
     const [newWorkplaceWage, setNewWorkplaceWage] = useState("1100");
+    const [newWorkplaceTransport, setNewWorkplaceTransport] = useState("0");
 
     const [isBulkMode, setIsBulkMode] = useState(false);
     const [selectedBulkDates, setSelectedBulkDates] = useState<string[]>([]);
@@ -1523,12 +1442,14 @@ function SalaryTab({ shiftsData, setShiftsData, workplaces, setWorkplaces, user 
     const handleSaveWorkplace = async () => {
         if (!newWorkplaceName || !user) return;
         const wage = parseInt(newWorkplaceWage, 10) || 0;
+        const transport = parseInt(newWorkplaceTransport, 10) || 0;
         try {
-            const { data, error } = await supabase.from('workplaces').insert([{ user_id: user.id, name: newWorkplaceName, hourly_wage: wage }]).select('*');
+            const { data, error } = await supabase.from('workplaces').insert([{ user_id: user.id, name: newWorkplaceName, hourly_wage: wage, transportation_fee: transport }]).select('*');
             if (error) throw error;
             if (data) setWorkplaces((prev: any) => [...prev, data[0]]);
             setIsWorkplaceModalOpen(false);
             setNewWorkplaceName("");
+            setNewWorkplaceTransport("0");
         } catch (err) { console.error(err); }
     };
 
@@ -1543,24 +1464,28 @@ function SalaryTab({ shiftsData, setShiftsData, workplaces, setWorkplaces, user 
 
     const submitShift = async () => {
         if (!shiftModalDate || !user || !selectedWorkplaceId) return;
-        const h = parseFloat(shiftHourInput);
+        const h = calcHours(startTime, endTime, breakMinutes);
 
         try {
-            if (isNaN(h) || h === 0) {
+            if (h === 0) {
                 await supabase.from('shifts').delete().eq('date', shiftModalDate).eq('workplace_id', selectedWorkplaceId).eq('user_id', user.id);
                 const copy = { ...shiftsData };
                 delete copy[shiftModalDate];
                 setShiftsData(copy);
             } else {
-                const { data, error } = await supabase.from('shifts').upsert({
+                const dbShift = {
                     user_id: user.id,
                     workplace_id: selectedWorkplaceId,
                     date: shiftModalDate,
-                    hours: h
-                }, { onConflict: 'user_id,workplace_id,date' }).select('*');
+                    hours: h,
+                    start_time: startTime,
+                    end_time: endTime,
+                    break_minutes: parseInt(breakMinutes, 10) || 0
+                };
+                const { data, error } = await supabase.from('shifts').upsert(dbShift, { onConflict: 'user_id,workplace_id,date' }).select('*');
 
                 if (error) throw error;
-                if (data) setShiftsData((prev: any) => ({ ...prev, [shiftModalDate]: { hours: h, workplace_id: selectedWorkplaceId, id: data[0].id } }));
+                if (data) setShiftsData((prev: any) => ({ ...prev, [shiftModalDate]: { ...dbShift, id: data[0].id } }));
             }
         } catch (err) { console.error(err); }
         setShiftModalDate(null);
@@ -1568,14 +1493,17 @@ function SalaryTab({ shiftsData, setShiftsData, workplaces, setWorkplaces, user 
 
     const handleBulkSave = async () => {
         if (selectedBulkDates.length === 0 || !user || !selectedWorkplaceId) return;
-        const h = parseFloat(shiftHourInput);
-        if (isNaN(h)) return;
+        const h = calcHours(startTime, endTime, breakMinutes);
+        if (h <= 0) return;
 
         const bulkData = selectedBulkDates.map(date => ({
             user_id: user.id,
             workplace_id: selectedWorkplaceId,
             date,
-            hours: h
+            hours: h,
+            start_time: startTime,
+            end_time: endTime,
+            break_minutes: parseInt(breakMinutes, 10) || 0
         }));
 
         try {
@@ -1584,7 +1512,7 @@ function SalaryTab({ shiftsData, setShiftsData, workplaces, setWorkplaces, user 
             if (data) {
                 const updatedShifts = { ...shiftsData };
                 data.forEach((s: any) => {
-                    updatedShifts[s.date] = { hours: s.hours, workplace_id: s.workplace_id, id: s.id };
+                    updatedShifts[s.date] = { ...s };
                 });
                 setShiftsData(updatedShifts);
             }
@@ -1620,8 +1548,9 @@ function SalaryTab({ shiftsData, setShiftsData, workplaces, setWorkplaces, user 
             if (!summaries[s.workplace_id]) summaries[s.workplace_id] = { hours: 0, gross: 0 };
             const wp = workplaces.find((w: any) => w.id === s.workplace_id);
             const wage = wp ? wp.hourly_wage : 1100;
+            const trans = wp ? (wp.transportation_fee || 0) : 0;
             summaries[s.workplace_id].hours += s.hours;
-            summaries[s.workplace_id].gross += s.hours * wage;
+            summaries[s.workplace_id].gross += (s.hours * wage) + trans;
         });
         return summaries;
     }, [monthlyShifts, workplaces]);
@@ -1699,7 +1628,7 @@ function SalaryTab({ shiftsData, setShiftsData, workplaces, setWorkplaces, user 
                                     <div key={wp.id} className="flex justify-between items-center p-3 bg-slate-50 rounded-xl group relative">
                                         <div>
                                             <div className="font-bold text-sm text-slate-800">{wp.name}</div>
-                                            <div className="text-[10px] text-slate-400">時給 ¥{wp.hourly_wage.toLocaleString()}</div>
+                                            <div className="text-[10px] text-slate-400">時給 ¥{wp.hourly_wage.toLocaleString()} / 交通費 ¥{(wp.transportation_fee || 0).toLocaleString()}</div>
                                         </div>
                                         <div className="text-right flex items-center gap-4">
                                             <div>
@@ -1734,7 +1663,16 @@ function SalaryTab({ shiftsData, setShiftsData, workplaces, setWorkplaces, user 
                                             toggleBulkDate(dateStr);
                                         } else {
                                             setShiftModalDate(dateStr);
-                                            setShiftHourInput(shift ? shift.hours.toString() : "8");
+                                            if (shift) {
+                                                setStartTime(shift.start_time || "10:00");
+                                                setEndTime(shift.end_time || "19:00");
+                                                setBreakMinutes(String(shift.break_minutes || 60));
+                                                setSelectedWorkplaceId(shift.workplace_id);
+                                            } else {
+                                                setStartTime("10:00");
+                                                setEndTime("19:00");
+                                                setBreakMinutes("60");
+                                            }
                                         }
                                     }} className={cn("h-10 flex flex-col items-center justify-center rounded-lg border text-[10px] font-bold cursor-pointer transition-all",
                                         isSelected ? "bg-emerald-600 border-emerald-600 text-white scale-95" :
@@ -1787,13 +1725,25 @@ function SalaryTab({ shiftsData, setShiftsData, workplaces, setWorkplaces, user 
                                     </select>
                                 </div>
 
-                                <div>
-                                    <label className="text-[10px] font-bold text-slate-500 mb-2 block">勤務時間 (1日)</label>
-                                    <div className="flex items-center justify-between gap-4">
-                                        <button onClick={() => setShiftHourInput(p => Math.max(0, (parseFloat(p) || 0) - 0.5).toString())} className="w-12 h-12 rounded-full bg-slate-100 text-xl font-bold">-</button>
-                                        <input type="number" step="0.5" value={shiftHourInput} onChange={e => setShiftHourInput(e.target.value)} className="w-20 text-center text-2xl font-black tabular-nums border-b-2 border-emerald-500 outline-none" />
-                                        <button onClick={() => setShiftHourInput(p => ((parseFloat(p) || 0) + 0.5).toString())} className="w-12 h-12 rounded-full bg-emerald-100 text-emerald-600 text-xl font-bold">+</button>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="text-[10px] font-bold text-slate-500 mb-2 block">開始時間</label>
+                                        <input type="time" value={startTime} onChange={e => setStartTime(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-lg font-bold outline-none focus:border-emerald-500" />
                                     </div>
+                                    <div>
+                                        <label className="text-[10px] font-bold text-slate-500 mb-2 block">終了時間</label>
+                                        <input type="time" value={endTime} onChange={e => setEndTime(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-lg font-bold outline-none focus:border-emerald-500" />
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label className="text-[10px] font-bold text-slate-500 mb-2 block">休憩 (分)</label>
+                                    <input type="number" value={breakMinutes} onChange={e => setBreakMinutes(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-lg font-bold outline-none focus:border-emerald-500" />
+                                </div>
+
+                                <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100 flex justify-between items-center">
+                                    <span className="text-sm font-bold text-emerald-700">合計勤務時間</span>
+                                    <span className="text-xl font-black text-emerald-800 tabular-nums">{calcHours(startTime, endTime, breakMinutes).toFixed(2)}h</span>
                                 </div>
 
                                 <button onClick={submitShift} disabled={workplaces.length === 0} className="w-full bg-emerald-600 text-white font-bold py-4 rounded-2xl shadow-lg shadow-emerald-600/20 active:scale-[0.98] transition-all disabled:opacity-50">保存する</button>
@@ -1819,13 +1769,25 @@ function SalaryTab({ shiftsData, setShiftsData, workplaces, setWorkplaces, user 
                                     </select>
                                 </div>
 
-                                <div>
-                                    <label className="text-[10px] font-bold text-slate-500 mb-2 block">共通の勤務時間</label>
-                                    <div className="flex items-center justify-between gap-4">
-                                        <button onClick={() => setShiftHourInput(p => Math.max(0, (parseFloat(p) || 0) - 0.5).toString())} className="w-12 h-12 rounded-full bg-slate-100 text-xl font-bold">-</button>
-                                        <input type="number" step="0.5" value={shiftHourInput} onChange={e => setShiftHourInput(e.target.value)} className="w-20 text-center text-2xl font-black tabular-nums border-b-2 border-emerald-500 outline-none" />
-                                        <button onClick={() => setShiftHourInput(p => ((parseFloat(p) || 0) + 0.5).toString())} className="w-12 h-12 rounded-full bg-emerald-100 text-emerald-600 text-xl font-bold">+</button>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="text-[10px] font-bold text-slate-500 mb-2 block">開始時間</label>
+                                        <input type="time" value={startTime} onChange={e => setStartTime(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-lg font-bold outline-none focus:border-emerald-500" />
                                     </div>
+                                    <div>
+                                        <label className="text-[10px] font-bold text-slate-500 mb-2 block">終了時間</label>
+                                        <input type="time" value={endTime} onChange={e => setEndTime(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-lg font-bold outline-none focus:border-emerald-500" />
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label className="text-[10px] font-bold text-slate-500 mb-2 block">休憩 (分)</label>
+                                    <input type="number" value={breakMinutes} onChange={e => setBreakMinutes(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-lg font-bold outline-none focus:border-emerald-500" />
+                                </div>
+
+                                <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100 flex justify-between items-center">
+                                    <span className="text-sm font-bold text-emerald-700">合計勤務時間</span>
+                                    <span className="text-xl font-black text-emerald-800 tabular-nums">{calcHours(startTime, endTime, breakMinutes).toFixed(2)}h</span>
                                 </div>
 
                                 <button onClick={handleBulkSave} className="w-full bg-emerald-600 text-white font-bold py-4 rounded-2xl shadow-lg shadow-emerald-600/20 active:scale-[0.98] transition-all">一括保存する</button>
@@ -1846,6 +1808,10 @@ function SalaryTab({ shiftsData, setShiftsData, workplaces, setWorkplaces, user 
                                 <div>
                                     <label className="text-[10px] font-bold text-slate-500 mb-1 block">時給 (円)</label>
                                     <input type="number" value={newWorkplaceWage} onChange={e => setNewWorkplaceWage(e.target.value)} className="w-full p-3 bg-slate-50 rounded-xl border-none outline-none focus:ring-2 focus:ring-emerald-500 text-sm font-mono" />
+                                </div>
+                                <div>
+                                    <label className="text-[10px] font-bold text-slate-500 mb-1 block">交通費 (往復)</label>
+                                    <input type="number" value={newWorkplaceTransport} onChange={e => setNewWorkplaceTransport(e.target.value)} className="w-full p-3 bg-slate-50 rounded-xl border-none outline-none focus:ring-2 focus:ring-emerald-500 text-sm font-mono" />
                                 </div>
                                 <div className="flex gap-2 pt-2">
                                     <button onClick={() => setIsWorkplaceModalOpen(false)} className="flex-1 py-3 text-sm font-bold text-slate-400">閉じる</button>

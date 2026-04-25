@@ -24,25 +24,25 @@ export async function POST(req: Request) {
 最近の支出カテゴリ内訳: ${JSON.stringify(contextData.categorizedSpending)}
 
 【重要：CSV解析モード】
-もしユーザーが「📎 ... をアップロードしました」というメッセージの後にCSVデータを提供した場合、以下のJSON形式のみで返答してください。余計な文章は一切含めないでください。
+もしユーザーが「📎 ... をアップロードしました」といったメッセージと共にCSVデータを提供した場合、以下のJSON形式のみで返答してください。
+日本の銀行やカード会社の明細（日付、項目名、金額、備考など）を正確に読み取り、以下の配列形式に変換してください。
 [
   { "date": "YYYY-MM-DD", "item": "項目名", "amount": 数値, "type": "income"または"expense", "account": "推測される口座名" }
 ]
-CSVの各行を正確に抽出し、適切な型と金額（支出は負の数）を設定してください。日本語の項目名はそのまま維持してください。
+※ 支出（引落し）は必ず負の数として、収入は正の数として設定してください。余計な文章や説明は一切含めないでください。
 
-通常対話の場合は、プレーンテキストで、親近感のある言葉遣い（〜ですね、〜がおすすめです等）を使用してください。
-専門用語は避け、具体的な節約案や資産運用の第一歩を提案してください。`;
+通常対話の場合は、プレーンテキストで、親近感のある言葉遣い（〜ですね、〜がおすすめです等）を使用してください。`;
 
         const requestBody = {
             contents: [
                 { role: "user", parts: [{ text: systemPrompt + "\n\nユーザーの質問: " + userMessage }] }
             ],
             generationConfig: {
-                temperature: 0.7
+                temperature: 0.1
             }
         };
 
-        const res = await fetch(`https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(requestBody)

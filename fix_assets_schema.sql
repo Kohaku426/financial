@@ -35,3 +35,12 @@ FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
 DROP POLICY IF EXISTS "Users can manage their own histories" ON public.histories;
 CREATE POLICY "Users can manage their own histories" ON public.histories
 FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+
+-- 5. シフトテーブルの拡張 (時間形式の入力をサポート)
+ALTER TABLE public.shifts ADD COLUMN IF NOT EXISTS start_time text;
+ALTER TABLE public.shifts ADD COLUMN IF NOT EXISTS end_time text;
+ALTER TABLE public.shifts ADD COLUMN IF NOT EXISTS break_minutes numeric DEFAULT 0;
+
+COMMENT ON COLUMN public.shifts.start_time IS '勤務開始時間 (HH:mm)';
+COMMENT ON COLUMN public.shifts.end_time IS '勤務終了時間 (HH:mm)';
+COMMENT ON COLUMN public.shifts.break_minutes IS '休憩時間 (分)';
