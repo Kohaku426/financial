@@ -1422,6 +1422,10 @@ function SalaryTab({ shiftsData, setShiftsData, workplaces, setWorkplaces, user 
     const [newWorkplaceName, setNewWorkplaceName] = useState("");
     const [newWorkplaceWage, setNewWorkplaceWage] = useState("1100");
 
+    const [isBulkMode, setIsBulkMode] = useState(false);
+    const [selectedBulkDates, setSelectedBulkDates] = useState<string[]>([]);
+    const [isBulkSaveModalOpen, setIsBulkSaveModalOpen] = useState(false);
+
     const baseDate = new Date();
     baseDate.setMonth(baseDate.getMonth() + currentMonthOffset);
     const m = baseDate.getMonth() + 1;
@@ -1480,6 +1484,39 @@ function SalaryTab({ shiftsData, setShiftsData, workplaces, setWorkplaces, user 
         setShiftModalDate(null);
     };
 
+    const handleBulkSave = async () => {
+        if (selectedBulkDates.length === 0 || !user || !selectedWorkplaceId) return;
+        const h = parseFloat(shiftHourInput);
+        if (isNaN(h)) return;
+
+        const bulkData = selectedBulkDates.map(date => ({
+            user_id: user.id,
+            workplace_id: selectedWorkplaceId,
+            date,
+            hours: h
+        }));
+
+        try {
+            const { data, error } = await supabase.from('shifts').upsert(bulkData, { onConflict: 'user_id,workplace_id,date' }).select('*');
+            if (error) throw error;
+            if (data) {
+                const updatedShifts = { ...shiftsData };
+                data.forEach((s: any) => {
+                    updatedShifts[s.date] = { hours: s.hours, workplace_id: s.workplace_id, id: s.id };
+                });
+                setShiftsData(updatedShifts);
+            }
+        } catch (err) { console.error(err); }
+
+        setIsBulkSaveModalOpen(false);
+        setIsBulkMode(false);
+        setSelectedBulkDates([]);
+    };
+
+    const toggleBulkDate = (date: string) => {
+        setSelectedBulkDates(prev => prev.includes(date) ? prev.filter(d => d !== date) : [...prev, date]);
+    };
+
     const monthlyShifts = useMemo(() => {
         return Object.keys(shiftsData).filter(dateStr => {
             const date = new Date(dateStr);
@@ -1531,10 +1568,13 @@ function SalaryTab({ shiftsData, setShiftsData, workplaces, setWorkplaces, user 
     }
 
     return (
-        <div className="pb-16 bg-white min-h-screen -m-3 md:-m-6 text-slate-800">
+        <div className="pb-16 bg-white min-h-screen -m-3 md:-m-6 text-slate-800 relative">
             <header className="bg-white flex justify-between items-center py-3 px-4 shadow-sm border-b border-slate-200 sticky top-0 z-20">
                 <div className="text-lg font-bold tracking-tighter text-slate-900">{y}年 {m}月</div>
-                <button onClick={() => setIsConfigModalOpen(true)} className="text-emerald-700 p-2"><Settings size={20} /></button>
+                <div className="flex gap-2">
+                    <button onClick={() => { setIsBulkMode(!isBulkMode); setSelectedBulkDates([]); }} className={cn("text-[10px] font-bold px-3 py-1 rounded-full border transition-all", isBulkMode ? "bg-emerald-600 text-white border-emerald-600" : "bg-white text-emerald-600 border-emerald-200")}>一括登録</button>
+                    <button onClick={() => setIsConfigModalOpen(true)} className="text-emerald-700 p-2"><Settings size={20} /></button>
+                </div>
             </header>
 
             <div className="flex border-b border-slate-100 bg-white">
@@ -1594,17 +1634,32 @@ function SalaryTab({ shiftsData, setShiftsData, workplaces, setWorkplaces, user 
                     </div>
 
                     <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+                        <div className="flex justify-between items-center mb-4 px-1">
+                            <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{isBulkMode ? "日付を複数選択してください" : "シフトカレンダー"}</h3>
+                            {isBulkMode && <span className="text-[10px] font-bold text-emerald-600">{selectedBulkDates.length}件選択中</span>}
+                        </div>
                         <div className="grid grid-cols-7 gap-1">
                             {['日', '月', '火', '水', '木', '金', '土'].map(d => <div key={d} className="text-[10px] font-bold text-slate-400 mb-2">{d}</div>)}
-                            {/* Simple month grid logic - abbreviated for space */}
                             {Array.from({ length: 31 }).map((_, i) => {
                                 const d = i + 1;
                                 const dateStr = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
                                 const shift = shiftsData[dateStr];
+                                const isSelected = selectedBulkDates.includes(dateStr);
+
                                 return (
-                                    <div key={d} onClick={() => { setShiftModalDate(dateStr); setShiftHourInput(shift ? shift.hours.toString() : "8"); }} className={cn("h-10 flex flex-col items-center justify-center rounded-lg border text-[10px] font-bold cursor-pointer transition-all", shift ? "bg-emerald-50 border-emerald-200 text-emerald-700" : "border-slate-50 bg-slate-50/30 hover:bg-slate-100")}>
+                                    <div key={d} onClick={() => {
+                                        if (isBulkMode) {
+                                            toggleBulkDate(dateStr);
+                                        } else {
+                                            setShiftModalDate(dateStr);
+                                            setShiftHourInput(shift ? shift.hours.toString() : "8");
+                                        }
+                                    }} className={cn("h-10 flex flex-col items-center justify-center rounded-lg border text-[10px] font-bold cursor-pointer transition-all",
+                                        isSelected ? "bg-emerald-600 border-emerald-600 text-white scale-95" :
+                                            shift ? "bg-emerald-50 border-emerald-200 text-emerald-700" : "border-slate-50 bg-slate-50/30 hover:bg-slate-100")}>
                                         {d}
-                                        {shift && <span>{shift.hours}h</span>}
+                                        {!isSelected && shift && <span>{shift.hours}h</span>}
+                                        {isSelected && <CheckCircle2 size={12} className="mt-0.5" />}
                                     </div>
                                 );
                             })}
@@ -1613,7 +1668,25 @@ function SalaryTab({ shiftsData, setShiftsData, workplaces, setWorkplaces, user 
                 </div>
             )}
 
-            {/* Modals are essentially the same but with workplace selection added for shifts */}
+            {/* Bulk Mode Action Bar */}
+            <AnimatePresence>
+                {isBulkMode && selectedBulkDates.length > 0 && (
+                    <motion.div initial={{ y: 100 }} animate={{ y: 0 }} exit={{ y: 200 }} className="fixed bottom-24 left-1/2 -translate-x-1/2 z-[80] w-[90%] max-w-sm">
+                        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-2xl flex items-center justify-between">
+                            <div className="text-white">
+                                <div className="text-[10px] font-bold opacity-50 uppercase">Selected</div>
+                                <div className="text-sm font-black">{selectedBulkDates.length} days</div>
+                            </div>
+                            <div className="flex gap-2">
+                                <button onClick={() => setSelectedBulkDates([])} className="px-4 py-2 text-xs font-bold text-slate-400">クリア</button>
+                                <button onClick={() => setIsBulkSaveModalOpen(true)} className="px-6 py-2 bg-emerald-500 text-white rounded-xl text-xs font-bold shadow-lg shadow-emerald-500/20">次へ進む</button>
+                            </div>
+                        </div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* Modals */}
             <AnimatePresence>
                 {shiftModalDate && (
                     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-end justify-center">
@@ -1642,6 +1715,38 @@ function SalaryTab({ shiftsData, setShiftsData, workplaces, setWorkplaces, user 
                                 </div>
 
                                 <button onClick={submitShift} disabled={workplaces.length === 0} className="w-full bg-emerald-600 text-white font-bold py-4 rounded-2xl shadow-lg shadow-emerald-600/20 active:scale-[0.98] transition-all disabled:opacity-50">保存する</button>
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                )}
+
+                {isBulkSaveModalOpen && (
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-end justify-center">
+                        <motion.div initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }} className="bg-white rounded-t-3xl w-full max-w-sm p-6 pb-12 shadow-2xl">
+                            <div className="flex justify-between items-center mb-2">
+                                <h3 className="font-bold text-slate-800">一括登録 ({selectedBulkDates.length}日間)</h3>
+                                <button onClick={() => setIsBulkSaveModalOpen(false)}><X size={20} /></button>
+                            </div>
+                            <p className="text-[10px] text-slate-400 mb-6">選択した全日程に同じシフト時間を適用します</p>
+
+                            <div className="space-y-6">
+                                <div>
+                                    <label className="text-[10px] font-bold text-slate-500 mb-2 block">共通の勤務地</label>
+                                    <select value={selectedWorkplaceId} onChange={e => setSelectedWorkplaceId(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:border-emerald-500">
+                                        {workplaces.map((wp: any) => <option key={wp.id} value={wp.id}>{wp.name} (¥{wp.hourly_wage})</option>)}
+                                    </select>
+                                </div>
+
+                                <div>
+                                    <label className="text-[10px] font-bold text-slate-500 mb-2 block">共通の勤務時間</label>
+                                    <div className="flex items-center justify-between gap-4">
+                                        <button onClick={() => setShiftHourInput(p => Math.max(0, (parseFloat(p) || 0) - 0.5).toString())} className="w-12 h-12 rounded-full bg-slate-100 text-xl font-bold">-</button>
+                                        <input type="number" step="0.5" value={shiftHourInput} onChange={e => setShiftHourInput(e.target.value)} className="w-20 text-center text-2xl font-black tabular-nums border-b-2 border-emerald-500 outline-none" />
+                                        <button onClick={() => setShiftHourInput(p => ((parseFloat(p) || 0) + 0.5).toString())} className="w-12 h-12 rounded-full bg-emerald-100 text-emerald-600 text-xl font-bold">+</button>
+                                    </div>
+                                </div>
+
+                                <button onClick={handleBulkSave} className="w-full bg-emerald-600 text-white font-bold py-4 rounded-2xl shadow-lg shadow-emerald-600/20 active:scale-[0.98] transition-all">一括保存する</button>
                             </div>
                         </motion.div>
                     </motion.div>
